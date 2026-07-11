@@ -131,6 +131,52 @@ range_formatting_reply <- function(id, uri, document, range, options) {
     Response$new(id, TextEditList)
 }
 
+#' Format several non-overlapping document ranges (LSP 3.18)
+#' @noRd
+ranges_formatting_reply <- function(id, uri, document, ranges, options) {
+    if (!length(ranges)) return(Response$new(id, result = list()))
+
+    # range_formatting_reply expands edits to whole lines. Merge requested
+    # ranges that would therefore produce overlapping edits.
+    normalized <- lapply(ranges, function(item) {
+        end_row <- item$end$row
+        if (item$end$col == 0L && item$start$row < end_row) {
+            end_row <- end_row - 1L
+        }
+        list(start = item$start, end = list(row = end_row, col = item$end$col))
+    })
+    order_index <- order(
+        vapply(normalized, function(item) item$start$row, numeric(1L)),
+        vapply(normalized, function(item) item$start$col, numeric(1L))
+    )
+    normalized <- normalized[order_index]
+
+    merged <- list()
+    for (item in normalized) {
+        if (!length(merged)) {
+            merged[[1L]] <- item
+            next
+        }
+        last <- merged[[length(merged)]]
+        if (item$start$row <= last$end$row) {
+            if (item$end$row > last$end$row ||
+                (item$end$row == last$end$row && item$end$col > last$end$col)) {
+                last$end <- item$end
+            }
+            merged[[length(merged)]] <- last
+        } else {
+            merged[[length(merged) + 1L]] <- item
+        }
+    }
+
+    edits <- list()
+    for (item in merged) {
+        reply <- range_formatting_reply(NULL, uri, document, item, options)
+        if (length(reply$result)) edits <- c(edits, reply$result)
+    }
+    Response$new(id, result = edits)
+}
+
 #' Format on type
 #' @noRd
 on_type_formatting_reply <- function(id, uri, document, point, ch, options) {

@@ -1,5 +1,16 @@
 # languageserver 0.3.18
 
+- Add LSP 3.18 capability updates, including multiple-range formatting,
+  explicit UTF-16 position encoding, and the semantic token `label` type.
+- Add R-focused code lenses for function call counts, linked editing between
+  roxygen parameters and function formals, debugger inline values, and
+  parameter-name inlay hints.
+- Make parameter-name inlay hints conservative by default and open VS Code's
+  semantic call hierarchy when a function call-count lens is clicked.
+- Use incremental document synchronization, reject stale background results,
+  cache workspace routing, and reduce event-loop latency for more responsive
+  editing.
+
 **Closed issues:**
 
 - Failed to run diagnostics: ! in callr subprocess. Caused by error in `call[[1L]]` (#723)

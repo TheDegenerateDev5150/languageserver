@@ -131,6 +131,15 @@ diagnose_file <- function(uri, content, is_rmarkdown = FALSE, globals = NULL, ca
 diagnostics_callback <- function(self, uri, version, diagnostics) {
     workspace <- self$get_workspace(uri)
     if (is.null(diagnostics) || !workspace$documents$has(uri) || !lsp_settings$get("diagnostics")) return(NULL)
+    document <- workspace$documents$get(uri)
+    if (!is.null(version) && !identical(document$version, version)) {
+        logger$info("diagnostics_callback: discarded stale result", list(
+            uri = uri,
+            result_version = version,
+            document_version = document$version
+        ))
+        return(NULL)
+    }
 
     logger$info("diagnostics_callback called:", list(
         uri = uri,

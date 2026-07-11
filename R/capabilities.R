@@ -10,7 +10,7 @@ TextDocumentSyncKind <- list(
 
 TextDocumentSyncOptions <- list(
     openClose = TRUE,
-    change = TextDocumentSyncKind$Full,
+    change = TextDocumentSyncKind$Incremental,
     willSave = FALSE,
     willSaveWaitUntil = FALSE,
     save = SaveOptions
@@ -26,7 +26,15 @@ SignatureHelpOptions <- list(
 )
 
 CodeLensOptions <- list(
-    resolveProvider = FALSE
+    resolveProvider = TRUE
+)
+
+InlayHintOptions <- list(
+    resolveProvider = TRUE
+)
+
+DocumentRangeFormattingOptions <- list(
+    rangesSupport = TRUE
 )
 
 DocumentOnTypeFormattingOptions <- list(
@@ -52,7 +60,8 @@ SemanticTokensOptions <- list(
             "namespace", "type", "class", "enum", "interface", "struct",
             "typeParameter", "parameter", "variable", "property", "enumMember",
             "event", "function", "method", "macro", "keyword", "modifier",
-            "comment", "string", "number", "regexp", "operator", "decorator"
+            "comment", "string", "number", "regexp", "operator", "decorator",
+            "label"
         ),
         tokenModifiers = c(
             "declaration", "definition", "readonly", "static", "deprecated",
@@ -64,6 +73,7 @@ SemanticTokensOptions <- list(
 )
 
 ServerCapabilities <- list(
+    positionEncoding = "utf-16",
     textDocumentSync = TextDocumentSyncOptions,
     hoverProvider = TRUE,
     completionProvider = CompletionOptions,
@@ -76,9 +86,9 @@ ServerCapabilities <- list(
     documentSymbolProvider = TRUE,
     workspaceSymbolProvider = TRUE,
     codeActionProvider = TRUE,
-    # codeLensProvider = CodeLensOptions,
+    codeLensProvider = CodeLensOptions,
     documentFormattingProvider = TRUE,
-    documentRangeFormattingProvider = TRUE,
+    documentRangeFormattingProvider = DocumentRangeFormattingOptions,
     documentOnTypeFormattingProvider = DocumentOnTypeFormattingOptions,
     renameProvider = TRUE,
     documentLinkProvider = DocumentLinkOptions,
@@ -88,7 +98,9 @@ ServerCapabilities <- list(
     callHierarchyProvider = TRUE,
     typeHierarchyProvider = TRUE,
     semanticTokensProvider = SemanticTokensOptions,
-    # linkedEditingRangeProvider = FALSE,
+    linkedEditingRangeProvider = TRUE,
+    inlineValueProvider = TRUE,
+    inlayHintProvider = InlayHintOptions,
     # monikerProvider = FALSE,
     # executeCommandProvider = ExecuteCommandOptions,
     workspace = list(

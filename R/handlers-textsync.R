@@ -39,16 +39,22 @@ text_document_did_change <- function(self, params) {
     contentChanges <- params$contentChanges
     uri <- uri_escape_unicode(textDocument$uri)
     version <- textDocument$version
-    text <- contentChanges[[1]]$text
     logger$info("did change:", list(uri = uri, version = version))
-    content <- stringi::stri_split_lines(text)[[1]]
     
     workspace <- self$get_workspace(uri)
 
     if (workspace$documents$has(uri)) {
         doc <- workspace$documents$get(uri)
-        doc$set_content(version, content)
+        doc$apply_content_changes(version, contentChanges)
     } else {
+        # Incremental changes are only valid for an open document. Be
+        # tolerant of a client that sends a full replacement before didOpen.
+        full_change <- Filter(function(change) is.null(change$range), contentChanges)
+        content <- if (length(full_change)) {
+            stringi::stri_split_lines(full_change[[length(full_change)]]$text)[[1]]
+        } else {
+            ""
+        }
         doc <- Document$new(uri, language = NULL, version = version, content = content)
         workspace$documents$set(uri, doc)
     }

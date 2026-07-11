@@ -12,7 +12,9 @@ Settings <- R6::R6Class("Settings",
             diagnostics_cache_ttl = 5,
             server_capabilities = list(),
             link_file_size_limit = 16L * 1024L^2,
-            nline_to_break_succession = 2L
+            nline_to_break_succession = 2L,
+            inlay_hints_minimum_arguments = 2L,
+            inlay_hints_minimum_argument_length = 2L
         )
     ),
     public = list(

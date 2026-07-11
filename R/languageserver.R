@@ -27,6 +27,7 @@ LanguageServer <- R6::R6Class("LanguageServer",
         exit_flag = NULL,
         documents = NULL,
         workspaces = NULL,
+        workspace_cache = NULL,
         processId = NULL,
         rootUri = NULL,
         rootPath = NULL,
@@ -70,6 +71,7 @@ LanguageServer <- R6::R6Class("LanguageServer",
 
             self$pending_replies <- collections::dict()
             self$workspaces <- collections::dict()
+            self$workspace_cache <- collections::dict()
             self$workspaces$set(DEFAULT_WORKSPACE, Workspace$new(NULL))
 
             super$initialize()
@@ -102,6 +104,7 @@ LanguageServer <- R6::R6Class("LanguageServer",
                         }
                     }
                 }
+                self$workspace_cache$clear()
             }
         },
         remove_workspace = function(uri) {
@@ -119,6 +122,7 @@ LanguageServer <- R6::R6Class("LanguageServer",
                     }
                 }
                 self$workspaces$remove(key)
+                self$workspace_cache$clear()
             }
         },
         get_workspace = function(uri) {
@@ -131,6 +135,10 @@ LanguageServer <- R6::R6Class("LanguageServer",
 
             if (length(uri) == 0) {
                 return(fallback)
+            }
+
+            if (self$workspace_cache$has(uri)) {
+                return(self$workspace_cache$get(uri))
             }
 
             path <- path_from_uri(uri)
@@ -149,9 +157,11 @@ LanguageServer <- R6::R6Class("LanguageServer",
             }
 
             if (is.null(best_match)) {
+                self$workspace_cache$set(uri, fallback)
                 return(fallback)
             }
 
+            self$workspace_cache$set(uri, best_match)
             best_match
         },
         load_workspace = function(workspace) {
@@ -183,6 +193,10 @@ LanguageServer <- R6::R6Class("LanguageServer",
                     `textDocument/foldingRange` = collections::queue(),
                     `textDocument/documentLink` = collections::queue(),
                     `textDocument/documentColor` = collections::queue(),
+                    `textDocument/codeLens` = collections::queue(),
+                    `textDocument/linkedEditingRange` = collections::queue(),
+                    `textDocument/inlineValue` = collections::queue(),
+                    `textDocument/inlayHint` = collections::queue(),
                     `textDocument/semanticTokens/full` = collections::queue(),
                     `textDocument/semanticTokens/range` = collections::queue()
                 ))
@@ -262,7 +276,7 @@ LanguageServer <- R6::R6Class("LanguageServer",
 
                         data <- self$fetch(blocking = FALSE)
                         if (is.null(data)) {
-                            Sys.sleep(0.1)
+                            Sys.sleep(0.01)
                             next
                         }
                         self$handle_raw(data)
@@ -290,6 +304,7 @@ LanguageServer$set("public", "register_handlers", function() {
         `textDocument/signatureHelp` = text_document_signature_help,
         `textDocument/formatting` = text_document_formatting,
         `textDocument/rangeFormatting` = text_document_range_formatting,
+        `textDocument/rangesFormatting` = text_document_ranges_formatting,
         `textDocument/onTypeFormatting` = text_document_on_type_formatting,
         `textDocument/documentSymbol` = text_document_document_symbol,
         `textDocument/documentHighlight` = text_document_document_highlight,
@@ -297,6 +312,8 @@ LanguageServer$set("public", "register_handlers", function() {
         `documentLink/resolve` = document_link_resolve,
         `textDocument/documentColor` = text_document_document_color,
         `textDocument/codeAction` = text_document_code_action,
+        `textDocument/codeLens` = text_document_code_lens,
+        `codeLens/resolve` = code_lens_resolve,
         `textDocument/colorPresentation` = text_document_color_presentation,
         `textDocument/foldingRange` = text_document_folding_range,
         `textDocument/references` = text_document_references,
@@ -310,6 +327,9 @@ LanguageServer$set("public", "register_handlers", function() {
         `typeHierarchy/supertypes` = type_hierarchy_supertypes,
         `typeHierarchy/subtypes` = type_hierarchy_subtypes,
         `textDocument/linkedEditingRange` = text_document_linked_editing_range,
+        `textDocument/inlineValue` = text_document_inline_value,
+        `textDocument/inlayHint` = text_document_inlay_hint,
+        `inlayHint/resolve` = inlay_hint_resolve,
         `textDocument/semanticTokens/full` = text_document_semantic_tokens_full,
         `textDocument/semanticTokens/range` = text_document_semantic_tokens_range,
         `workspace/symbol` = workspace_symbol
