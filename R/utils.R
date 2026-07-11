@@ -659,7 +659,21 @@ xdoc_find_enclosing_scopes <- function(x, line, col, top = FALSE) {
 xdoc_find_token <- function(x, line, col) {
     xpath <- glue("//*[not(*)][(@line1 < {line} or (@line1 = {line} and @col1 <= {col})) and (@line2 > {line} or (@line2 = {line} and @col2 >= {col}-1))]",
         line = line, col = col)
-    xml_find_first(x, xpath)
+    tokens <- xml_find_all(x, xpath)
+    if (!length(tokens)) {
+        return(xml_find_first(x, xpath))
+    }
+
+    # A cursor at the boundary before a string literal can match both the
+    # literal and the preceding punctuation. Prefer the string in this case,
+    # while retaining document order for other token boundaries.
+    token_names <- xml_name(tokens)
+    is_string <- token_names == "STR_CONST"
+    if (any(is_string)) {
+        return(tokens[is_string][[1]])
+    }
+
+    tokens[[1]]
 }
 
 xml_single_quote <- function(x) {
