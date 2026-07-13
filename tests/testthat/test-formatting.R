@@ -178,6 +178,80 @@ test_that("On type formatting works", {
     ))
 })
 
+test_that("On type formatting safely completes incomplete expressions", {
+    withr::local_options(languageserver.formatting_style = NULL)
+    options <- list(tabSize = 4L, insertSpaces = TRUE)
+    cases <- list(
+        call = list(
+            content = c("foo(", "  a=1,", ""),
+            expected = "foo(\n    a = 1,\n    "
+        ),
+        pipeline = list(
+            content = c("data%>%", " mutate(a=1)%>%", ""),
+            expected = "data %>%\n    mutate(a = 1) %>%\n    "
+        ),
+        block = list(
+            content = c("if(x){", ""),
+            expected = "if (x) {\n    "
+        ),
+        for_loop = list(
+            content = c("for(", ""),
+            expected = "for (\n    "
+        )
+    )
+
+    for (case in cases) {
+        document <- Document$new(
+            "file:///incomplete.R",
+            language = "r",
+            content = case$content
+        )
+        point <- list(
+            row = length(case$content) - 1L,
+            col = nchar(case$content[[length(case$content)]])
+        )
+        reply <- on_type_formatting_reply(
+            1L, document$uri, document, point, "\n", options
+        )
+
+        expect_length(reply$result, 1L)
+        expect_equal(reply$result[[1L]]$newText, case$expected)
+        expect_false(grepl("languageserver_formatting_sentinel", reply$result[[1L]]$newText))
+    }
+})
+
+test_that("On type formatting falls back to indentation for unsafe syntax", {
+    withr::local_options(languageserver.formatting_style = NULL)
+    document <- Document$new(
+        "file:///incomplete.R",
+        language = "r",
+        content = c(
+            "f <- function() {",
+            "    x <- \"unterminated",
+            ""
+        )
+    )
+    reply <- on_type_formatting_reply(
+        1L,
+        document$uri,
+        document,
+        list(row = 2L, col = 0L),
+        "\n",
+        list(tabSize = 4L, insertSpaces = TRUE)
+    )
+
+    expect_length(reply$result, 1L)
+    expect_equal(
+        unclass(reply$result[[1L]]$range$start),
+        list(line = 2L, character = 0L)
+    )
+    expect_equal(
+        unclass(reply$result[[1L]]$range$end),
+        list(line = 2L, character = 0L)
+    )
+    expect_equal(reply$result[[1L]]$newText, "    ")
+})
+
 test_that("Formatting in Rmarkdown works", {
     skip_on_cran()
     client <- language_client()
