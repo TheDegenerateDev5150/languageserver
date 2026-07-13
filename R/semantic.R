@@ -27,7 +27,8 @@ SemanticTokenTypes <- list(
     number = 19L,
     regexp = 20L,
     operator = 21L,
-    decorator = 22L
+    decorator = 22L,
+    label = 23L
 )
 
 # Token modifiers

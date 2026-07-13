@@ -34,6 +34,58 @@ Document <- R6::R6Class(
             self$content <- content
         },
 
+        apply_content_changes = function(version, content_changes) {
+            for (change in content_changes) {
+                if (is.null(change$range)) {
+                    self$set_content(
+                        version,
+                        stringi::stri_split_lines(change$text)[[1]]
+                    )
+                    next
+                }
+
+                start <- self$from_lsp_position(change$range$start)
+                end <- self$from_lsp_position(change$range$end)
+                replacement <- stringi::stri_split_lines(change$text)[[1]]
+
+                start_line <- self$line0(start$row)
+                end_line <- self$line0(end$row)
+                prefix <- if (start$col > 0L) {
+                    stringi::stri_sub(start_line, 1L, start$col)
+                } else {
+                    ""
+                }
+                suffix <- stringi::stri_sub(end_line, end$col + 1L)
+
+                if (length(replacement) == 1L) {
+                    changed <- paste0(prefix, replacement, suffix)
+                } else {
+                    middle <- if (length(replacement) > 2L) {
+                        replacement[seq.int(2L, length(replacement) - 1L)]
+                    } else {
+                        character()
+                    }
+                    changed <- c(
+                        paste0(prefix, replacement[[1L]]),
+                        middle,
+                        paste0(replacement[[length(replacement)]], suffix)
+                    )
+                }
+
+                before <- if (start$row > 0L) {
+                    self$content[seq_len(start$row)]
+                } else {
+                    character()
+                }
+                after <- if (end$row + 1L < length(self$content)) {
+                    self$content[seq.int(end$row + 2L, length(self$content))]
+                } else {
+                    character()
+                }
+                self$set_content(version, c(before, changed, after))
+            }
+        },
+
         update_parse_data = function(parse_data) {
             self$parse_data <- parse_data
         },
@@ -479,6 +531,14 @@ parse_callback <- function(self, uri, version, parse_data) {
     if (is.null(parse_data) || !workspace$documents$has(uri)) return(NULL)
     logger$info("parse_callback called:", list(uri = uri, version = version))
     doc <- workspace$documents$get(uri)
+    if (!is.null(version) && !identical(doc$version, version)) {
+        logger$info("parse_callback: discarded stale result", list(
+            uri = uri,
+            result_version = version,
+            document_version = doc$version
+        ))
+        return(NULL)
+    }
 
     parse_data$version <- version
     old_parse_data <- doc$parse_data

@@ -140,7 +140,7 @@ The following editors are supported by installing the corresponding extensions:
 - [x] [documentSymbolProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_documentSymbol)
 - [x] [workspaceSymbolProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#workspace_symbol)
 - [x] [codeActionProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_codeAction)
-- [ ] [codeLensProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_codeLens)
+- [x] [codeLensProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_codeLens)
 - [x] [documentFormattingProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_formatting)
 - [x] [documentRangeFormattingProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_rangeFormatting)
 - [x] [documentOnTypeFormattingProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_onTypeFormatting)
@@ -159,10 +159,17 @@ The following editors are supported by installing the corresponding extensions:
 - [x] [typeHierarchySupertypes](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#typeHierarchy_supertypes)
 - [x] [typeHierarchySubtypes](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#typeHierarchy_subtypes)
 - [x] [semanticTokens](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_semanticTokens)
-- [ ] [linkedEditingRange](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_linkedEditingRange)
+- [x] [linkedEditingRange](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_linkedEditingRange)
 - [ ] [executeCommandProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#workspace_executeCommand)
-- [ ] [inlineValueProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_inlineValue)
-- [ ] [inlayHintProivder](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_inlayHint)
+- [x] [inlineValueProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_inlineValue)
+- [x] [inlayHintProvider](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_inlayHint)
+
+Inline values are a debugger-facing feature rather than normal editor
+annotations. When execution is paused, a compatible editor and debug adapter
+request variable lookup ranges from the language server, evaluate them in the
+selected stack frame, and render the resulting values beside the source. They
+have no visible effect when the client or R debug adapter does not request
+`textDocument/inlineValue`.
 
 ## Settings
 
@@ -173,6 +180,8 @@ settings | default | description
 `r.lsp.debug`  | `false` | increase verbosity for debug purpose
 `r.lsp.log_file` | `null` | file to log debug messages, fallback to stderr if empty
 `r.lsp.diagnostics` | `true` | enable file diagnostics via [lintr](https://github.com/r-lib/lintr)
+`r.lsp.inlay_hints_minimum_arguments` | `2` | minimum supplied arguments before parameter-name inlay hints are shown
+`r.lsp.inlay_hints_minimum_argument_length` | `2` | minimum argument-name length for an inlay hint, excluding an initial `.`
 `r.lsp.rich_documentation` | `true` | rich documentation with enhanced markdown features
 `r.lsp.snippet_support` | `true` | enable snippets in auto completion
 `r.lsp.max_completions` | 200 | maximum number of completion items

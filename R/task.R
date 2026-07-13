@@ -176,7 +176,10 @@ TaskManager <- R6::R6Class("TaskManager",
             private$process_recent_first <- process_recent_first
             
             private$session_idle_timeout <- session_idle_timeout
-            cpus <- min(parallel::detectCores())
+            cpus <- suppressWarnings(parallel::detectCores())
+            if (length(cpus) != 1L || is.na(cpus) || cpus < 1L) {
+                cpus <- 1L
+            }
             max_running_tasks <- min(cpus, max_running_tasks)
             private$max_running_tasks <- max(min(max_running_tasks, round(cpus * cpu_load)), 1)
             if (use_session) {
