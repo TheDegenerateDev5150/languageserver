@@ -427,12 +427,55 @@ imported_object_completion <- function(workspace, token, snippet_support) {
     completions
 }
 
+#' Select the best completion candidates without constructing completion items
+#' @noRd
+completion_select_indices <- function(labels, sort_text, token, limit) {
+    if (length(labels) <= limit) {
+        return(seq_along(labels))
+    }
+    selected <- .Call(
+        "completion_select_c",
+        PACKAGE = "languageserver",
+        labels,
+        sort_text,
+        token,
+        as.integer(limit)
+    )
+    if (is.null(selected)) {
+        candidate_order <- order(
+            !startsWith(labels, token), sort_text, method = "radix")
+        selected <- candidate_order[seq_len(limit)]
+    }
+    selected
+}
+
 
 #' Complete any object in the workspace
 #' @noRd
 workspace_completion <- function(workspace, token,
-    package = NULL, exported_only = TRUE, snippet_support = NULL) {
-    completions <- list()
+    package = NULL, exported_only = TRUE, snippet_support = NULL, limit = Inf) {
+    candidates <- list()
+
+    append_candidates <- function(objects, kind, detail, sort_prefix,
+        type, package, is_function = FALSE) {
+        if (!length(objects)) {
+            return(NULL)
+        }
+        size <- length(objects)
+        recycle <- function(value) {
+            if (length(value) == 1L) rep.int(value, size) else value
+        }
+        candidates[[length(candidates) + 1L]] <<- list(
+            label = objects,
+            kind = recycle(kind),
+            detail = recycle(detail),
+            sort_text = paste0(sort_prefix, objects),
+            type = recycle(type),
+            package = recycle(package),
+            is_function = recycle(is_function)
+        )
+        NULL
+    }
 
     if (is.null(package)) {
         packages <- c(WORKSPACE, workspace$loaded_packages)
@@ -454,66 +497,118 @@ workspace_completion <- function(workspace, token,
                 sort_prefix <- sort_prefixes$global
             }
 
-            functs_completions <- ns_function_completion(ns, token,
-                exported_only = TRUE, snippet_support = snippet_support)
+            functs <- ns$get_symbols(want_functs = TRUE, exported_only = TRUE)
+            functs <- functs[match_with(functs, token)]
+            append_candidates(
+                functs, CompletionItemKind$Function, tag, sort_prefix,
+                "function", nsname, is_function = TRUE)
 
             nonfuncts <- ns$get_symbols(want_functs = FALSE, exported_only = TRUE)
             nonfuncts <- nonfuncts[match_with(nonfuncts, token)]
-            nonfuncts_completions <- lapply(nonfuncts, function(object) {
-                list(label = object,
-                     kind = CompletionItemKind$Field,
-                     detail = tag,
-                     sortText = paste0(sort_prefix, object),
-                     data = list(
-                         type = "nonfunction",
-                         package = nsname
-                     ))
-            })
+            append_candidates(
+                nonfuncts, CompletionItemKind$Field, tag, sort_prefix,
+                "nonfunction", nsname)
+
             lazydata <- ns$get_lazydata()
             lazydata <- lazydata[match_with(lazydata, token)]
-            lazydata_completions <- lapply(lazydata, function(object) {
-                list(label = object,
-                     kind = CompletionItemKind$Field,
-                     detail = tag,
-                     sortText = paste0(sort_prefix, object),
-                     data = list(
-                         type = "lazydata",
-                         package = nsname
-                     ))
-            })
-            completions <- c(completions,
-                functs_completions,
-                nonfuncts_completions,
-                lazydata_completions)
+            append_candidates(
+                lazydata, CompletionItemKind$Field, tag, sort_prefix,
+                "lazydata", nsname)
         }
     } else {
         ns <- workspace$get_namespace(package)
         if (!is.null(ns)) {
             tag <- paste0("{", package, "}")
-            functs_completions <- ns_function_completion(ns, token,
-                exported_only = FALSE, snippet_support = snippet_support)
+            functs <- ns$get_symbols(want_functs = TRUE, exported_only = FALSE)
+            functs <- functs[match_with(functs, token)]
+            append_candidates(
+                functs, CompletionItemKind$Function, tag, sort_prefixes$global,
+                "function", package, is_function = TRUE)
 
             nonfuncts <- ns$get_symbols(want_functs = FALSE, exported_only = FALSE)
             nonfuncts <- nonfuncts[match_with(nonfuncts, token)]
-            nonfuncts_completions <- lapply(nonfuncts, function(object) {
-                list(label = object,
-                     kind = CompletionItemKind$Field,
-                     detail = tag,
-                     sortText = paste0(sort_prefixes$global, object),
-                     data = list(
-                         type = "nonfunction",
-                         package = package
-                     ))
-            })
-            completions <- c(completions,
-                functs_completions,
-                nonfuncts_completions)
+            append_candidates(
+                nonfuncts, CompletionItemKind$Field, tag, sort_prefixes$global,
+                "nonfunction", package)
         }
     }
 
     if (is.null(package)) {
-        imported_completions <- imported_object_completion(workspace, token, snippet_support)
-        completions <- c(completions, imported_completions)
+        keys <- as.character(workspace$imported_objects$keys())
+        keys <- keys[match_with(keys, token)]
+        imported_labels <- character(length(keys))
+        imported_packages <- character(length(keys))
+        imported_count <- 0L
+        for (object in keys) {
+            nsname <- workspace$imported_objects$get(object)
+            ns <- workspace$get_namespace(nsname)
+            if (!is.null(ns) && ns$exists_funct(object)) {
+                imported_count <- imported_count + 1L
+                imported_labels[[imported_count]] <- object
+                imported_packages[[imported_count]] <- nsname
+            }
+        }
+        if (imported_count) {
+            selected <- seq_len(imported_count)
+            imported_labels <- imported_labels[selected]
+            imported_packages <- imported_packages[selected]
+            append_candidates(
+                imported_labels,
+                CompletionItemKind$Function,
+                paste0("{", imported_packages, "}"),
+                sort_prefixes$imported,
+                "function",
+                imported_packages,
+                is_function = TRUE
+            )
+        }
+    }
+
+    if (!length(candidates)) {
+        return(list())
+    }
+
+    combine <- function(name) {
+        unlist(lapply(candidates, "[[", name), use.names = FALSE)
+    }
+    labels <- combine("label")
+    sort_text <- combine("sort_text")
+    truncated <- length(labels) > limit
+    selected <- completion_select_indices(labels, sort_text, token, limit)
+
+    labels <- labels[selected]
+    kinds <- combine("kind")[selected]
+    details <- combine("detail")[selected]
+    sort_text <- sort_text[selected]
+    types <- combine("type")[selected]
+    packages <- combine("package")[selected]
+    functions <- combine("is_function")[selected]
+
+    completions <- unname(Map(function(label, kind, detail, sort_text,
+        type, package, is_function) {
+        if (isTRUE(snippet_support) && is_function) {
+            list(
+                label = label,
+                kind = kind,
+                detail = detail,
+                sortText = sort_text,
+                insertText = paste0(label, "($0)"),
+                insertTextFormat = InsertTextFormat$Snippet,
+                data = list(type = type, package = package)
+            )
+        } else {
+            list(
+                label = label,
+                kind = kind,
+                detail = detail,
+                sortText = sort_text,
+                data = list(type = type, package = package)
+            )
+        }
+    }, labels, kinds, details, sort_text, types, packages, functions))
+
+    if (truncated) {
+        attr(completions, "truncated") <- TRUE
     }
 
     completions
@@ -600,9 +695,8 @@ scope_completion <- function(uri, workspace, token, point,
     candidate_names <- c(scope_symbol_names, scope_funct_names)
     truncated <- length(candidate_names) > limit
     if (truncated) {
-        candidate_order <- order(
-            !startsWith(candidate_names, token), candidate_names)
-        keep <- candidate_order[seq_len(limit)]
+        keep <- completion_select_indices(
+            candidate_names, candidate_names, token, limit)
         symbol_keep <- keep[keep <= length(scope_symbol_names)]
         function_keep <- keep[keep > length(scope_symbol_names)] -
             length(scope_symbol_names)
@@ -708,7 +802,8 @@ token_completion <- function(uri, workspace, token, exclude = NULL, limit = Inf)
     symbols <- setdiff(symbols, exclude)
     truncated <- length(symbols) > limit
     if (truncated) {
-        symbols <- sort(symbols)[seq_len(limit)]
+        selected <- completion_select_indices(symbols, symbols, token, limit)
+        symbols <- symbols[selected]
     }
     completions <- lapply(symbols, function(symbol) {
         list(
@@ -761,10 +856,12 @@ completion_reply <- function(id, uri, workspace, document, point, capabilities) 
                 package_completion(token),
                 scope_completions)
         }
-        completions <- c(
-            completions,
-            workspace_completion(
-                workspace, token, package, token_result$accessor == "::", snippet_support))
+        workspace_completions <- workspace_completion(
+            workspace, token, package, token_result$accessor == "::",
+            snippet_support, nmax)
+        providers_incomplete <- providers_incomplete ||
+            isTRUE(attr(workspace_completions, "truncated"))
+        completions <- c(completions, workspace_completions)
     }
 
     if (token_result$accessor == "") {
@@ -799,8 +896,9 @@ completion_reply <- function(id, uri, workspace, document, point, capabilities) 
         isIncomplete <- TRUE
         label_text <- vapply(completions, "[[", character(1), "label")
         sort_text <- vapply(completions, "[[", character(1), "sortText")
-        order <- order(!startsWith(label_text, token), sort_text)
-        completions <- completions[order][seq_len(nmax)]
+        selected <- completion_select_indices(
+            label_text, sort_text, token, nmax)
+        completions <- completions[selected]
     } else {
         isIncomplete <- FALSE
     }

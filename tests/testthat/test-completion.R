@@ -1389,6 +1389,54 @@ test_that("Completion providers bound broad result sets early", {
         sort(vapply(items, `[[`, character(1L), "label")),
         sprintf("value_%04d", 1:20)
     )
+
+    namespace <- new.env(parent = baseenv())
+    namespace$get_symbols <- function(want_functs, ...) {
+        if (want_functs) {
+            sprintf("value_function_%04d", 500:1)
+        } else {
+            sprintf("value_field_%04d", 500:1)
+        }
+    }
+    namespace$get_lazydata <- function() sprintf("value_data_%04d", 500:1)
+    workspace <- new.env(parent = baseenv())
+    workspace$get_namespace <- function(...) namespace
+
+    workspace_items <- workspace_completion(
+        workspace,
+        "value_",
+        package = "example",
+        exported_only = TRUE,
+        limit = 20L
+    )
+    all_labels <- c(
+        namespace$get_symbols(TRUE),
+        namespace$get_symbols(FALSE),
+        namespace$get_lazydata()
+    )
+    expected <- all_labels[
+        order(paste0(sort_prefixes$global, all_labels), method = "radix")
+    ][1:20]
+
+    expect_length(workspace_items, 20L)
+    expect_true(isTRUE(attr(workspace_items, "truncated")))
+    expect_equal(
+        vapply(workspace_items, `[[`, character(1L), "label"),
+        expected
+    )
+})
+
+test_that("Completion candidate selection uses stable UTF-8 radix ordering", {
+    labels <- c("zeta", "äther", "Alpha", ".hidden", "_private", "alpha")
+    sort_text <- paste0(sort_prefixes$global, labels)
+    token <- "a"
+    expected <- order(
+        !startsWith(labels, token), sort_text, method = "radix")[1:4]
+
+    expect_identical(
+        completion_select_indices(labels, sort_text, token, 4L),
+        expected
+    )
 })
 
 test_that("Argument value completion resolves formals once", {

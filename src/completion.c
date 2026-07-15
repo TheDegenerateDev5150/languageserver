@@ -121,6 +121,153 @@ static SEXP row_vector(const int *rows, int size) {
     return result;
 }
 
+typedef struct {
+    const char **labels;
+    const char **sort_text;
+    const char *token;
+    size_t token_length;
+} completion_order_context;
+
+static int starts_with_token(
+    const char *label,
+    const completion_order_context *context
+) {
+    return strlen(label) >= context->token_length &&
+        strncmp(label, context->token, context->token_length) == 0;
+}
+
+/* Negative means a should sort before b. */
+static int compare_completion_candidates(
+    int a,
+    int b,
+    const completion_order_context *context
+) {
+    int a_prefix = starts_with_token(context->labels[a], context);
+    int b_prefix = starts_with_token(context->labels[b], context);
+    if (a_prefix != b_prefix) return b_prefix - a_prefix;
+
+    int comparison = strcmp(context->sort_text[a], context->sort_text[b]);
+    if (comparison != 0) return comparison;
+    return a < b ? -1 : a > b;
+}
+
+/* The heap root is the worst currently selected candidate. */
+static void completion_heap_sift_up(
+    int *heap,
+    int child,
+    const completion_order_context *context
+) {
+    while (child > 0) {
+        int parent = (child - 1) / 2;
+        if (compare_completion_candidates(
+                heap[parent], heap[child], context) >= 0) break;
+        int value = heap[parent];
+        heap[parent] = heap[child];
+        heap[child] = value;
+        child = parent;
+    }
+}
+
+static void completion_heap_sift_down(
+    int *heap,
+    int size,
+    const completion_order_context *context
+) {
+    int parent = 0;
+    while (1) {
+        int left = parent * 2 + 1;
+        if (left >= size) break;
+        int right = left + 1;
+        int worse = left;
+        if (right < size && compare_completion_candidates(
+                heap[left], heap[right], context) < 0) {
+            worse = right;
+        }
+        if (compare_completion_candidates(
+                heap[parent], heap[worse], context) >= 0) break;
+        int value = heap[parent];
+        heap[parent] = heap[worse];
+        heap[worse] = value;
+        parent = worse;
+    }
+}
+
+SEXP completion_select_c(
+    SEXP labels,
+    SEXP sort_text,
+    SEXP token,
+    SEXP limit
+) {
+    if (!Rf_isString(labels) || !Rf_isString(sort_text) ||
+            !Rf_isString(token) || XLENGTH(token) != 1 ||
+            !Rf_isInteger(limit) || XLENGTH(limit) != 1) {
+        Rf_error("invalid completion selector arguments");
+    }
+    R_xlen_t n_long = XLENGTH(labels);
+    if (n_long > INT_MAX || XLENGTH(sort_text) != n_long) {
+        Rf_error("invalid completion selector lengths");
+    }
+    int n = (int) n_long;
+    int max_selected = INTEGER(limit)[0];
+    if (max_selected == NA_INTEGER || max_selected < 0) {
+        Rf_error("completion selector limit must be non-negative");
+    }
+    if (max_selected > n) max_selected = n;
+
+    if (STRING_ELT(token, 0) == NA_STRING) {
+        Rf_error("completion selector token must not be missing");
+    }
+    const char **label_text = (const char **)
+        R_alloc((size_t) n, sizeof(const char *));
+    const char **sort_text_values = (const char **)
+        R_alloc((size_t) n, sizeof(const char *));
+    for (int i = 0; i < n; i++) {
+        if (STRING_ELT(labels, i) == NA_STRING ||
+                STRING_ELT(sort_text, i) == NA_STRING) {
+            Rf_error("completion selector candidates must not be missing");
+        }
+        label_text[i] = Rf_translateCharUTF8(STRING_ELT(labels, i));
+        sort_text_values[i] = Rf_translateCharUTF8(STRING_ELT(sort_text, i));
+    }
+    const char *token_text = Rf_translateCharUTF8(STRING_ELT(token, 0));
+
+    completion_order_context context = {
+        label_text,
+        sort_text_values,
+        token_text,
+        strlen(token_text)
+    };
+
+    int *heap = (int *) R_alloc((size_t) max_selected, sizeof(int));
+    int heap_size = 0;
+    for (int i = 0; i < n; i++) {
+        if ((i & 16383) == 0) R_CheckUserInterrupt();
+        if (heap_size < max_selected) {
+            heap[heap_size] = i;
+            completion_heap_sift_up(heap, heap_size, &context);
+            heap_size++;
+        } else if (max_selected > 0 && compare_completion_candidates(
+                i, heap[0], &context) < 0) {
+            heap[0] = i;
+            completion_heap_sift_down(heap, heap_size, &context);
+        }
+    }
+
+    /* Sorting at most max_completions entries is cheap and deterministic. */
+    for (int i = 1; i < heap_size; i++) {
+        int value = heap[i];
+        int position = i;
+        while (position > 0 && compare_completion_candidates(
+                value, heap[position - 1], &context) < 0) {
+            heap[position] = heap[position - 1];
+            position--;
+        }
+        heap[position] = value;
+    }
+
+    return row_vector(heap, heap_size);
+}
+
 SEXP completion_parse_index_c(
     SEXP id,
     SEXP parent,

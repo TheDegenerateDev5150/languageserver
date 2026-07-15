@@ -39,6 +39,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"match_with_c", (DL_FUNC) &match_with_c, 2},
     {"fuzzy_find_c", (DL_FUNC) &fuzzy_find_c, 2},
     {"completion_parse_index_c", (DL_FUNC) &completion_parse_index_c, 7},
+    {"completion_select_c", (DL_FUNC) &completion_select_c, 4},
 #if !defined(_WIN32)
     {"process_is_detached", (DL_FUNC) &process_is_detached},
 #endif
