@@ -75,144 +75,22 @@ completion_parse_data <- function(data) {
         ))
     }
 
-    rows <- seq_len(nrow(data))
-    children <- list2env(split(rows, data$parent), hash = TRUE,
-        parent = emptyenv())
-    row_by_id <- integer(max(data$id) + 1L)
-    row_by_id[data$id + 1L] <- rows
+    index <- .Call(
+        "completion_parse_index_c",
+        PACKAGE = "languageserver",
+        data$id,
+        data$parent,
+        data$token,
+        data$line1,
+        data$col1,
+        data$line2,
+        data$col2
+    )
 
-    child_rows <- function(id) {
-        children[[as.character(id)]]
-    }
-
-    top_row <- function(row) {
-        parent <- data$parent[[row]]
-        while (parent != 0L) {
-            row <- row_by_id[[parent + 1L]]
-            parent <- data$parent[[row]]
-        }
-        row
-    }
-
-    symbol_row <- function(expr_row) {
-        expr_children <- child_rows(data$id[[expr_row]])
-        if (length(expr_children) == 1L &&
-                data$token[[expr_children]] == "SYMBOL") {
-            expr_children
-        } else {
-            NA_integer_
-        }
-    }
-
-    is_function_expr <- function(expr_row) {
-        expr_children <- child_rows(data$id[[expr_row]])
-        any(data$token[expr_children] %in% c("FUNCTION", "'\\\\'"))
-    }
-
-    assignment_rows <- which(data$token %in%
-            c("LEFT_ASSIGN", "RIGHT_ASSIGN", "EQ_ASSIGN"))
-    for_rows <- which(data$token == "forcond")
-    formal_rows <- which(data$token == "SYMBOL_FORMALS")
-
-    symbol_name_rows <- integer(length(assignment_rows) + length(for_rows))
-    symbol_range_rows <- integer(length(symbol_name_rows))
-    function_name_rows <- integer(length(assignment_rows))
-    function_range_rows <- integer(length(function_name_rows))
-    formal_name_rows <- integer(length(formal_rows))
-    formal_range_rows <- integer(length(formal_name_rows))
-    symbol_count <- 0L
-    function_count <- 0L
-    formal_count <- 0L
-
-    for (assignment_row in assignment_rows) {
-        siblings <- child_rows(data$parent[[assignment_row]])
-        expr_siblings <- siblings[data$token[siblings] == "expr"]
-        is_left <- data$token[[assignment_row]] != "RIGHT_ASSIGN"
-
-        if (is_left) {
-            candidates <- expr_siblings[
-                data$line2[expr_siblings] < data$line1[[assignment_row]] |
-                    data$line2[expr_siblings] == data$line1[[assignment_row]] &
-                        data$col2[expr_siblings] < data$col1[[assignment_row]]
-            ]
-            candidates <- candidates[order(
-                data$line2[candidates], data$col2[candidates])]
-            name_expr <- tail(candidates, 1L)
-
-            value_candidates <- expr_siblings[
-                data$line1[expr_siblings] > data$line2[[assignment_row]] |
-                    data$line1[expr_siblings] == data$line2[[assignment_row]] &
-                        data$col1[expr_siblings] > data$col2[[assignment_row]]
-            ]
-            value_candidates <- value_candidates[order(
-                data$line1[value_candidates], data$col1[value_candidates])]
-            value_expr <- head(value_candidates, 1L)
-        } else {
-            candidates <- expr_siblings[
-                data$line1[expr_siblings] > data$line2[[assignment_row]] |
-                    data$line1[expr_siblings] == data$line2[[assignment_row]] &
-                        data$col1[expr_siblings] > data$col2[[assignment_row]]
-            ]
-            candidates <- candidates[order(
-                data$line1[candidates], data$col1[candidates])]
-            name_expr <- head(candidates, 1L)
-
-            value_candidates <- expr_siblings[
-                data$line2[expr_siblings] < data$line1[[assignment_row]] |
-                    data$line2[expr_siblings] == data$line1[[assignment_row]] &
-                        data$col2[expr_siblings] < data$col1[[assignment_row]]
-            ]
-            value_candidates <- value_candidates[order(
-                data$line2[value_candidates], data$col2[value_candidates])]
-            value_expr <- tail(value_candidates, 1L)
-        }
-
-        if (!length(name_expr) || !length(value_expr)) {
-            next
-        }
-        name_row <- symbol_row(name_expr)
-        if (is.na(name_row)) {
-            next
-        }
-        range_row <- top_row(name_row)
-        if (is_function_expr(value_expr)) {
-            function_count <- function_count + 1L
-            function_name_rows[[function_count]] <- name_row
-            function_range_rows[[function_count]] <- range_row
-        } else {
-            symbol_count <- symbol_count + 1L
-            symbol_name_rows[[symbol_count]] <- name_row
-            symbol_range_rows[[symbol_count]] <- range_row
-        }
-    }
-
-    for (for_row in for_rows) {
-        name_rows <- child_rows(data$id[[for_row]])
-        name_rows <- name_rows[data$token[name_rows] == "SYMBOL"]
-        for (name_row in name_rows) {
-            symbol_count <- symbol_count + 1L
-            symbol_name_rows[[symbol_count]] <- name_row
-            symbol_range_rows[[symbol_count]] <- top_row(name_row)
-        }
-    }
-
-    for (name_row in formal_rows) {
-        range_row <- row_by_id[[data$parent[[name_row]] + 1L]]
-        if (!range_row) {
-            next
-        }
-        formal_count <- formal_count + 1L
-        formal_name_rows[[formal_count]] <- name_row
-        formal_range_rows[[formal_count]] <- range_row
-    }
-
-    make_records <- function(name_rows, range_rows, size) {
-        if (!size) {
+    make_records <- function(name_rows, range_rows) {
+        if (!length(name_rows)) {
             return(empty_scope())
         }
-        selected <- seq_len(size)
-        name_rows <- name_rows[selected]
-        range_rows <- range_rows[selected]
         list(
             name = data$text[name_rows],
             line = data$line1[name_rows],
@@ -223,23 +101,12 @@ completion_parse_data <- function(data) {
         )
     }
 
-    token_rows <- which(data$token %in%
-            c("SYMBOL", "SYMBOL_SUB", "SYMBOL_FORMALS", "SYMBOL_FUNCTION_CALL"))
-    dollar_parents <- data$parent[data$token == "'$'"]
-    empty_token_rows <- which(
-        data$token == "SYMBOL_SUB" |
-            data$token == "SYMBOL" & data$parent %in% dollar_parents
-    )
-
     list(
-        tokens = unique(data$text[token_rows]),
-        empty_tokens = unique(data$text[empty_token_rows]),
-        symbols = make_records(
-            symbol_name_rows, symbol_range_rows, symbol_count),
-        functions = make_records(
-            function_name_rows, function_range_rows, function_count),
-        formals = make_records(
-            formal_name_rows, formal_range_rows, formal_count)
+        tokens = unique(data$text[index$token]),
+        empty_tokens = unique(data$text[index$empty_token]),
+        symbols = make_records(index$symbol_name, index$symbol_range),
+        functions = make_records(index$function_name, index$function_range),
+        formals = make_records(index$formal_name, index$formal_range)
     )
 }
 

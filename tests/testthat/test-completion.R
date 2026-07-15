@@ -1412,3 +1412,24 @@ test_that("Argument value completion resolves formals once", {
         c("auto", "manual", "plain", "fancy")
     )
 })
+
+test_that("Completion parse index handles supported symbol forms", {
+    parse_data <- parse_document("file:///completion-index.R", c(
+        "# assignments",
+        "left_value <- 1",
+        "2 -> right_value",
+        "equal_value = 3",
+        "left_fun <- function(argument) argument",
+        "lambda_fun <- \\(lambda_argument) lambda_argument",
+        "for (loop_value in 1:3) print(loop_value)",
+        "object$member",
+        "target(named = 1)"
+    ))$completion_data
+
+    expect_setequal(parse_data$symbols$name,
+        c("left_value", "right_value", "equal_value", "loop_value"))
+    expect_setequal(parse_data$functions$name, c("left_fun", "lambda_fun"))
+    expect_setequal(parse_data$formals$name,
+        c("argument", "lambda_argument"))
+    expect_setequal(parse_data$empty_tokens, c("member", "named"))
+})
