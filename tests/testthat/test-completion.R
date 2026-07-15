@@ -1334,3 +1334,150 @@ test_that("Completion of argument values for positional in multi-parameter funct
     expect_false("slow" %in% labels)
     expect_false("plain" %in% labels)
 })
+
+test_that("Completion providers use precomputed document indexes", {
+    fixture <- provider_fixture(c(
+        "xvar0 <- rnorm(10)",
+        "my_fun <- function(xvar1) {",
+        "    xvar2 = 1",
+        "    2 -> xvar3",
+        "    for (xvar4 in 1:10) {",
+        "        xvar",
+        "    }",
+        "}"
+    ))
+    parse_data <- fixture$workspace$get_parse_data(fixture$uri)
+
+    # Prove these providers do not need to traverse the XML document.
+    parse_data$xml_doc <- NULL
+    scope_items <- scope_completion(
+        fixture$uri,
+        fixture$workspace,
+        "xvar",
+        list(row = 5L, col = 12L)
+    )
+    scope_labels <- vapply(scope_items, `[[`, character(1L), "label")
+    expect_setequal(scope_labels, c("xvar1", "xvar2", "xvar3", "xvar4"))
+
+    token_items <- token_completion(
+        fixture$uri, fixture$workspace, "xvar")
+    token_labels <- vapply(token_items, `[[`, character(1L), "label")
+    expect_setequal(token_labels,
+        c("xvar0", "xvar1", "xvar2", "xvar3", "xvar4", "xvar"))
+})
+
+test_that("Completion providers bound broad result sets early", {
+    variables <- sprintf("    value_%04d <- %d", 1:500, 1:500)
+    fixture <- provider_fixture(c(
+        "my_fun <- function() {",
+        variables,
+        "    value_",
+        "}"
+    ))
+
+    items <- scope_completion(
+        fixture$uri,
+        fixture$workspace,
+        "value_",
+        list(row = 501L, col = 10L),
+        limit = 20L
+    )
+
+    expect_length(items, 20L)
+    expect_true(isTRUE(attr(items, "truncated")))
+    expect_equal(
+        sort(vapply(items, `[[`, character(1L), "label")),
+        sprintf("value_%04d", 1:20)
+    )
+
+    namespace <- new.env(parent = baseenv())
+    namespace$get_symbols <- function(want_functs, ...) {
+        if (want_functs) {
+            sprintf("value_function_%04d", 500:1)
+        } else {
+            sprintf("value_field_%04d", 500:1)
+        }
+    }
+    namespace$get_lazydata <- function() sprintf("value_data_%04d", 500:1)
+    workspace <- new.env(parent = baseenv())
+    workspace$get_namespace <- function(...) namespace
+
+    workspace_items <- workspace_completion(
+        workspace,
+        "value_",
+        package = "example",
+        exported_only = TRUE,
+        limit = 20L
+    )
+    all_labels <- c(
+        namespace$get_symbols(TRUE),
+        namespace$get_symbols(FALSE),
+        namespace$get_lazydata()
+    )
+    expected <- all_labels[
+        order(paste0(sort_prefixes$global, all_labels), method = "radix")
+    ][1:20]
+
+    expect_length(workspace_items, 20L)
+    expect_true(isTRUE(attr(workspace_items, "truncated")))
+    expect_equal(
+        vapply(workspace_items, `[[`, character(1L), "label"),
+        expected
+    )
+})
+
+test_that("Completion candidate selection uses stable UTF-8 radix ordering", {
+    labels <- c("zeta", "äther", "Alpha", ".hidden", "_private", "alpha")
+    sort_text <- paste0(sort_prefixes$global, labels)
+    token <- "a"
+    expected <- order(
+        !startsWith(labels, token), sort_text, method = "radix")[1:4]
+
+    expect_identical(
+        completion_select_indices(labels, sort_text, token, 4L),
+        expected
+    )
+})
+
+test_that("Argument value completion resolves formals once", {
+    calls <- 0L
+    workspace <- new.env(parent = baseenv())
+    workspace$guess_namespace <- function(...) "example"
+    workspace$get_formals <- function(...) {
+        calls <<- calls + 1L
+        alist(
+            method = c("auto", "manual"),
+            style = c("plain", "fancy")
+        )
+    }
+
+    items <- arg_value_completion(
+        NULL, workspace, NULL, NULL, "a", "my_fun")
+
+    expect_equal(calls, 1L)
+    expect_setequal(
+        vapply(items, `[[`, character(1L), "label"),
+        c("auto", "manual", "plain", "fancy")
+    )
+})
+
+test_that("Completion parse index handles supported symbol forms", {
+    parse_data <- parse_document("file:///completion-index.R", c(
+        "# assignments",
+        "left_value <- 1",
+        "2 -> right_value",
+        "equal_value = 3",
+        "left_fun <- function(argument) argument",
+        "lambda_fun <- \\(lambda_argument) lambda_argument",
+        "for (loop_value in 1:3) print(loop_value)",
+        "object$member",
+        "target(named = 1)"
+    ))$completion_data
+
+    expect_setequal(parse_data$symbols$name,
+        c("left_value", "right_value", "equal_value", "loop_value"))
+    expect_setequal(parse_data$functions$name, c("left_fun", "lambda_fun"))
+    expect_setequal(parse_data$formals$name,
+        c("argument", "lambda_argument"))
+    expect_setequal(parse_data$empty_tokens, c("member", "named"))
+})

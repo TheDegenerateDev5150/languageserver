@@ -22,3 +22,21 @@ test_that("xdoc_find_token retains document order for other boundaries", {
     token <- xdoc_find_token(xdoc, line = 1, col = 3)
     expect_equal(xml2::xml_name(token), "OP-LEFT-PAREN")
 })
+
+test_that("indexed enclosing scope lookup preserves results", {
+    xdoc <- parse_xdoc(c(
+        "first <- 1",
+        "fun <- function(argument) {",
+        "  nested <- argument",
+        "  nested",
+        "}"
+    ))
+    expected <- xdoc_find_enclosing_scopes(xdoc, line = 4L, col = 5L,
+        top = TRUE)
+
+    attr(xdoc, "top_level_index") <- xdoc_top_level_index(xdoc)
+    actual <- xdoc_find_enclosing_scopes(xdoc, line = 4L, col = 5L,
+        top = TRUE)
+
+    expect_equal(xml2::xml_path(actual), xml2::xml_path(expected))
+})

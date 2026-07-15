@@ -254,6 +254,10 @@ Workspace <- R6::R6Class("Workspace",
             if (!is.null(parse_data$xml_data)) {
                 parse_data$xml_doc <- tryCatch(
                     xml2::read_xml(parse_data$xml_data), error = function(e) NULL)
+                if (!is.null(parse_data$xml_doc)) {
+                    attr(parse_data$xml_doc, "top_level_index") <-
+                        xdoc_top_level_index(parse_data$xml_doc)
+                }
             }
             self$documents$get(uri)$update_parse_data(parse_data)
             
