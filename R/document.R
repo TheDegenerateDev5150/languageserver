@@ -509,12 +509,14 @@ parse_document <- function(uri, content) {
             env$documentation <- list()
             env$xml_data <- NULL
             env$xml_doc <- NULL
+            env$completion_data <- NULL
             env$content_hash <- content_hash  # Store hash for cache validation
             env
         }
         env <- parse_env()
         parse_expr(content, expr, env)
         env$packages <- basename(find.package(env$packages, quiet = TRUE))
+        env$completion_data <- completion_parse_data(getParseData(expr))
         # Performance: XML generation is expensive, but necessary for analysis
         env$xml_data <- xmlparsedata::xml_parse_data(expr)
         # IMPORTANT: Do NOT create xml_doc here - this function runs in a child process

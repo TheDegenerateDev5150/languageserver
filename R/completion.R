@@ -47,6 +47,202 @@ constants <- c("TRUE", "FALSE", "NULL",
     "NA", "NA_integer_", "NA_real_", "NA_complex_", "NA_character_",
     "Inf", "NaN")
 
+#' Build the symbol indexes used by completion providers
+#'
+#' This runs with the document parser so completion requests do not have to
+#' repeatedly walk the complete XML parse tree. All values stored here are
+#' ordinary R vectors and can therefore be returned by the parse subprocess.
+#' @noRd
+completion_parse_data <- function(data) {
+    empty_scope <- function() {
+        list(
+            name = character(),
+            line = integer(),
+            line1 = integer(),
+            col1 = integer(),
+            line2 = integer(),
+            col2 = integer()
+        )
+    }
+
+    if (is.null(data) || !nrow(data)) {
+        return(list(
+            tokens = character(),
+            empty_tokens = character(),
+            symbols = empty_scope(),
+            functions = empty_scope(),
+            formals = empty_scope()
+        ))
+    }
+
+    rows <- seq_len(nrow(data))
+    children <- list2env(split(rows, data$parent), hash = TRUE,
+        parent = emptyenv())
+    row_by_id <- integer(max(data$id) + 1L)
+    row_by_id[data$id + 1L] <- rows
+
+    child_rows <- function(id) {
+        children[[as.character(id)]]
+    }
+
+    top_row <- function(row) {
+        parent <- data$parent[[row]]
+        while (parent != 0L) {
+            row <- row_by_id[[parent + 1L]]
+            parent <- data$parent[[row]]
+        }
+        row
+    }
+
+    symbol_row <- function(expr_row) {
+        expr_children <- child_rows(data$id[[expr_row]])
+        if (length(expr_children) == 1L &&
+                data$token[[expr_children]] == "SYMBOL") {
+            expr_children
+        } else {
+            NA_integer_
+        }
+    }
+
+    is_function_expr <- function(expr_row) {
+        expr_children <- child_rows(data$id[[expr_row]])
+        any(data$token[expr_children] %in% c("FUNCTION", "'\\\\'"))
+    }
+
+    assignment_rows <- which(data$token %in%
+            c("LEFT_ASSIGN", "RIGHT_ASSIGN", "EQ_ASSIGN"))
+    for_rows <- which(data$token == "forcond")
+    formal_rows <- which(data$token == "SYMBOL_FORMALS")
+
+    symbol_name_rows <- integer(length(assignment_rows) + length(for_rows))
+    symbol_range_rows <- integer(length(symbol_name_rows))
+    function_name_rows <- integer(length(assignment_rows))
+    function_range_rows <- integer(length(function_name_rows))
+    formal_name_rows <- integer(length(formal_rows))
+    formal_range_rows <- integer(length(formal_name_rows))
+    symbol_count <- 0L
+    function_count <- 0L
+    formal_count <- 0L
+
+    for (assignment_row in assignment_rows) {
+        siblings <- child_rows(data$parent[[assignment_row]])
+        expr_siblings <- siblings[data$token[siblings] == "expr"]
+        is_left <- data$token[[assignment_row]] != "RIGHT_ASSIGN"
+
+        if (is_left) {
+            candidates <- expr_siblings[
+                data$line2[expr_siblings] < data$line1[[assignment_row]] |
+                    data$line2[expr_siblings] == data$line1[[assignment_row]] &
+                        data$col2[expr_siblings] < data$col1[[assignment_row]]
+            ]
+            candidates <- candidates[order(
+                data$line2[candidates], data$col2[candidates])]
+            name_expr <- tail(candidates, 1L)
+
+            value_candidates <- expr_siblings[
+                data$line1[expr_siblings] > data$line2[[assignment_row]] |
+                    data$line1[expr_siblings] == data$line2[[assignment_row]] &
+                        data$col1[expr_siblings] > data$col2[[assignment_row]]
+            ]
+            value_candidates <- value_candidates[order(
+                data$line1[value_candidates], data$col1[value_candidates])]
+            value_expr <- head(value_candidates, 1L)
+        } else {
+            candidates <- expr_siblings[
+                data$line1[expr_siblings] > data$line2[[assignment_row]] |
+                    data$line1[expr_siblings] == data$line2[[assignment_row]] &
+                        data$col1[expr_siblings] > data$col2[[assignment_row]]
+            ]
+            candidates <- candidates[order(
+                data$line1[candidates], data$col1[candidates])]
+            name_expr <- head(candidates, 1L)
+
+            value_candidates <- expr_siblings[
+                data$line2[expr_siblings] < data$line1[[assignment_row]] |
+                    data$line2[expr_siblings] == data$line1[[assignment_row]] &
+                        data$col2[expr_siblings] < data$col1[[assignment_row]]
+            ]
+            value_candidates <- value_candidates[order(
+                data$line2[value_candidates], data$col2[value_candidates])]
+            value_expr <- tail(value_candidates, 1L)
+        }
+
+        if (!length(name_expr) || !length(value_expr)) {
+            next
+        }
+        name_row <- symbol_row(name_expr)
+        if (is.na(name_row)) {
+            next
+        }
+        range_row <- top_row(name_row)
+        if (is_function_expr(value_expr)) {
+            function_count <- function_count + 1L
+            function_name_rows[[function_count]] <- name_row
+            function_range_rows[[function_count]] <- range_row
+        } else {
+            symbol_count <- symbol_count + 1L
+            symbol_name_rows[[symbol_count]] <- name_row
+            symbol_range_rows[[symbol_count]] <- range_row
+        }
+    }
+
+    for (for_row in for_rows) {
+        name_rows <- child_rows(data$id[[for_row]])
+        name_rows <- name_rows[data$token[name_rows] == "SYMBOL"]
+        for (name_row in name_rows) {
+            symbol_count <- symbol_count + 1L
+            symbol_name_rows[[symbol_count]] <- name_row
+            symbol_range_rows[[symbol_count]] <- top_row(name_row)
+        }
+    }
+
+    for (name_row in formal_rows) {
+        range_row <- row_by_id[[data$parent[[name_row]] + 1L]]
+        if (!range_row) {
+            next
+        }
+        formal_count <- formal_count + 1L
+        formal_name_rows[[formal_count]] <- name_row
+        formal_range_rows[[formal_count]] <- range_row
+    }
+
+    make_records <- function(name_rows, range_rows, size) {
+        if (!size) {
+            return(empty_scope())
+        }
+        selected <- seq_len(size)
+        name_rows <- name_rows[selected]
+        range_rows <- range_rows[selected]
+        list(
+            name = data$text[name_rows],
+            line = data$line1[name_rows],
+            line1 = data$line1[range_rows],
+            col1 = data$col1[range_rows],
+            line2 = data$line2[range_rows],
+            col2 = data$col2[range_rows]
+        )
+    }
+
+    token_rows <- which(data$token %in%
+            c("SYMBOL", "SYMBOL_SUB", "SYMBOL_FORMALS", "SYMBOL_FUNCTION_CALL"))
+    dollar_parents <- data$parent[data$token == "'$'"]
+    empty_token_rows <- which(
+        data$token == "SYMBOL_SUB" |
+            data$token == "SYMBOL" & data$parent %in% dollar_parents
+    )
+
+    list(
+        tokens = unique(data$text[token_rows]),
+        empty_tokens = unique(data$text[empty_token_rows]),
+        symbols = make_records(
+            symbol_name_rows, symbol_range_rows, symbol_count),
+        functions = make_records(
+            function_name_rows, function_range_rows, function_count),
+        formals = make_records(
+            formal_name_rows, formal_range_rows, formal_count)
+    )
+}
+
 #' Complete language constants
 #' @noRd
 constant_completion <- function(token) {
@@ -120,9 +316,14 @@ extract_default_values <- function(default_expr) {
 
 #' Complete argument values based on default parameter values
 #' @noRd
-argument_value_completion <- function(workspace, funct, package, arg_name, token, exported_only = TRUE) {
-    # Get the formals for the function
-    formals_list <- workspace$get_formals(funct, package, exported_only = exported_only)
+argument_value_completion <- function(workspace, funct, package, arg_name, token,
+    exported_only = TRUE, formals_list = NULL) {
+    # Reuse formals already resolved by the caller when completing multiple
+    # arguments from the same function.
+    if (is.null(formals_list)) {
+        formals_list <- workspace$get_formals(funct, package,
+            exported_only = exported_only)
+    }
     
     if (is.null(formals_list) || !is.list(formals_list)) {
         return(list())
@@ -194,7 +395,9 @@ arg_value_completion <- function(uri, workspace, document, point, token, funct, 
             matching_values <- values[match_with(values, token)]
             if (length(matching_values) > 0) {
                 # Generate completions for this parameter
-                param_completions <- argument_value_completion(workspace, funct, package_for_call, param_name, token, exported_only)
+                param_completions <- argument_value_completion(
+                    workspace, funct, package_for_call, param_name, token,
+                    exported_only, formals_list)
                 all_completions <- c(all_completions, param_completions)
             }
         }
@@ -463,26 +666,84 @@ scope_completion_functs_xpath <- paste(
     "(* | descendant-or-self::expr | descendant-or-self::expr_or_assign_or_help)/EQ_ASSIGN[following-sibling::expr/*[self::FUNCTION or self::OP-LAMBDA]]/preceding-sibling::expr[count(*)=1]/SYMBOL",
     sep = "|")
 
-scope_completion <- function(uri, workspace, token, point, snippet_support = NULL) {
-    xdoc <- workspace$get_parse_data(uri)$xml_doc
-    if (is.null(xdoc)) {
-        return(list())
+scope_completion <- function(uri, workspace, token, point,
+    snippet_support = NULL, limit = Inf) {
+    parse_data <- workspace$get_parse_data(uri)
+    completion_data <- parse_data$completion_data
+    row <- point$row + 1L
+    col <- point$col + 1L
+
+    contains_point <- function(records) {
+        (records$line1 < row |
+                records$line1 == row & records$col1 <= col) &
+            (records$line2 > row |
+                    records$line2 == row & records$col2 >= col - 1L)
     }
 
-    enclosing_scopes <- xdoc_find_enclosing_scopes(xdoc,
-        point$row + 1, point$col + 1)
+    if (!is.null(completion_data)) {
+        symbol_selector <- contains_point(completion_data$symbols)
+        formal_selector <- contains_point(completion_data$formals)
+        scope_symbol_names <- c(
+            completion_data$symbols$name[symbol_selector],
+            completion_data$formals$name[formal_selector]
+        )
+        scope_symbol_lines <- c(
+            completion_data$symbols$line[symbol_selector],
+            completion_data$formals$line[formal_selector]
+        )
 
-    scope_symbol_nodes <- xml_find_all(enclosing_scopes, scope_completion_symbols_xpath)
-    scope_symbol_names <- xml_text(scope_symbol_nodes)
-    scope_symbol_lines <- as.integer(xml_attr(scope_symbol_nodes, "line1"))
+        function_selector <- contains_point(completion_data$functions)
+        scope_funct_names <- completion_data$functions$name[function_selector]
+        scope_funct_lines <- completion_data$functions$line[function_selector]
+    } else {
+        xdoc <- parse_data$xml_doc
+        if (is.null(xdoc)) {
+            return(list())
+        }
+
+        enclosing_scopes <- xdoc_find_enclosing_scopes(xdoc, row, col)
+
+        scope_symbol_nodes <- xml_find_all(enclosing_scopes,
+            scope_completion_symbols_xpath)
+        scope_symbol_names <- xml_text(scope_symbol_nodes)
+        scope_symbol_lines <- as.integer(xml_attr(scope_symbol_nodes, "line1"))
+
+        scope_funct_nodes <- xml_find_all(enclosing_scopes,
+            scope_completion_functs_xpath)
+        scope_funct_names <- xml_text(scope_funct_nodes)
+        scope_funct_lines <- as.integer(xml_attr(scope_funct_nodes, "line1"))
+    }
+
     scope_symbol_selector <- match_with(scope_symbol_names, token)
-
     scope_symbol_names <- rev(scope_symbol_names[scope_symbol_selector])
     scope_symbol_lines <- rev(scope_symbol_lines[scope_symbol_selector])
     scope_symbol_selector <- !duplicated(scope_symbol_names)
 
     scope_symbol_names <- scope_symbol_names[scope_symbol_selector]
     scope_symbol_lines <- scope_symbol_lines[scope_symbol_selector]
+
+    scope_funct_selector <- match_with(scope_funct_names, token)
+    scope_funct_names <- rev(scope_funct_names[scope_funct_selector])
+    scope_funct_lines <- rev(scope_funct_lines[scope_funct_selector])
+    scope_funct_selector <- !duplicated(scope_funct_names)
+
+    scope_funct_names <- scope_funct_names[scope_funct_selector]
+    scope_funct_lines <- scope_funct_lines[scope_funct_selector]
+
+    candidate_names <- c(scope_symbol_names, scope_funct_names)
+    truncated <- length(candidate_names) > limit
+    if (truncated) {
+        candidate_order <- order(
+            !startsWith(candidate_names, token), candidate_names)
+        keep <- candidate_order[seq_len(limit)]
+        symbol_keep <- keep[keep <= length(scope_symbol_names)]
+        function_keep <- keep[keep > length(scope_symbol_names)] -
+            length(scope_symbol_names)
+        scope_symbol_names <- scope_symbol_names[symbol_keep]
+        scope_symbol_lines <- scope_symbol_lines[symbol_keep]
+        scope_funct_names <- scope_funct_names[function_keep]
+        scope_funct_lines <- scope_funct_lines[function_keep]
+    }
 
     scope_symbol_completions <- .mapply(function(symbol, line) {
         list(
@@ -497,18 +758,6 @@ scope_completion <- function(uri, workspace, token, point, snippet_support = NUL
             )
         )
     }, list(scope_symbol_names, scope_symbol_lines), NULL)
-
-    scope_funct_nodes <- xml_find_all(enclosing_scopes, scope_completion_functs_xpath)
-    scope_funct_names <- xml_text(scope_funct_nodes)
-    scope_funct_lines <- as.integer(xml_attr(scope_funct_nodes, "line1"))
-    scope_funct_selector <- match_with(scope_funct_names, token)
-
-    scope_funct_names <- rev(scope_funct_names[scope_funct_selector])
-    scope_funct_lines <- rev(scope_funct_lines[scope_funct_selector])
-    scope_funct_selector <- !duplicated(scope_funct_names)
-
-    scope_funct_names <- scope_funct_names[scope_funct_selector]
-    scope_funct_lines <- scope_funct_lines[scope_funct_selector]
 
     if (isTRUE(snippet_support)) {
         scope_funct_completions <- .mapply(function(symbol, line) {
@@ -543,42 +792,68 @@ scope_completion <- function(uri, workspace, token, point, snippet_support = NUL
     }
 
     completions <- c(scope_symbol_completions, scope_funct_completions)
+    if (truncated) {
+        attr(completions, "truncated") <- TRUE
+    }
     completions
 }
 
-token_completion <- function(uri, workspace, token, exclude = NULL) {
-    xdoc <- workspace$get_parse_data(uri)$xml_doc
-    if (is.null(xdoc)) {
-        return(list())
-    }
+token_completion <- function(uri, workspace, token, exclude = NULL, limit = Inf) {
+    parse_data <- workspace$get_parse_data(uri)
+    completion_data <- parse_data$completion_data
+    if (!is.null(completion_data)) {
+        symbols <- if (nzchar(token)) {
+            completion_data$tokens
+        } else {
+            completion_data$empty_tokens
+        }
+        symbols <- symbols[startsWith(symbols, token)]
+    } else {
+        xdoc <- parse_data$xml_doc
+        if (is.null(xdoc)) {
+            return(list())
+        }
 
-    token_quote <- xml_single_quote(token)
+        token_quote <- xml_single_quote(token)
 
-    symbols <- xml_text(xml_find_all(xdoc,
-        glue("//*[
-            (self::SYMBOL[preceding-sibling::OP-DOLLAR] or self::SYMBOL_SUB) and
-            starts-with(text(),'{token_quote}')]",
-            token_quote = token_quote
-        )
-    ))
-
-    if (nzchar(token)) {
-        symbols <- c(symbols, xml_text(xml_find_all(xdoc,
-            glue("//*[(self::SYMBOL or self::SYMBOL_SUB or self::SYMBOL_FORMALS or self::SYMBOL_FUNCTION_CALL) and
-                starts-with(text(),'{token_quote}')]",
+        symbols <- xml_text(xml_find_all(
+            xdoc,
+            glue(
+                "//*[
+                    (self::SYMBOL[preceding-sibling::OP-DOLLAR] or self::SYMBOL_SUB) and
+                    starts-with(text(),'{token_quote}')]",
                 token_quote = token_quote
             )
-        )))
+        ))
+
+        if (nzchar(token)) {
+            symbols <- c(symbols, xml_text(xml_find_all(
+                xdoc,
+                glue(
+                    "//*[(self::SYMBOL or self::SYMBOL_SUB or self::SYMBOL_FORMALS or self::SYMBOL_FUNCTION_CALL) and
+                        starts-with(text(),'{token_quote}')]",
+                    token_quote = token_quote
+                )
+            )))
+        }
     }
 
     symbols <- setdiff(symbols, exclude)
-    token_completions <- lapply(symbols, function(symbol) {
+    truncated <- length(symbols) > limit
+    if (truncated) {
+        symbols <- sort(symbols)[seq_len(limit)]
+    }
+    completions <- lapply(symbols, function(symbol) {
         list(
             label = symbol,
             kind = CompletionItemKind$Text,
             sortText = paste0(sort_prefixes$token, symbol)
         )
     })
+    if (truncated) {
+        attr(completions, "truncated") <- TRUE
+    }
+    completions
 }
 
 #' The response to a textDocument/completion request
@@ -596,6 +871,7 @@ completion_reply <- function(id, uri, workspace, document, point, capabilities) 
     t0 <- Sys.time()
     snippet_support <- isTRUE(capabilities$completionItem$snippetSupport) &&
         lsp_settings$get("snippet_support")
+    nmax <- lsp_settings$get("max_completions")
 
     token_result <- document$detect_token(point, forward = FALSE)
 
@@ -604,14 +880,19 @@ completion_reply <- function(id, uri, workspace, document, point, capabilities) 
     package <- token_result$package
 
     completions <- list()
+    providers_incomplete <- FALSE
 
     if (nzchar(full_token)) {
         if (is.null(package)) {
+            scope_completions <- scope_completion(uri, workspace, token, point,
+                snippet_support, nmax)
+            providers_incomplete <- providers_incomplete ||
+                isTRUE(attr(scope_completions, "truncated"))
             completions <- c(
                 completions,
                 constant_completion(token),
                 package_completion(token),
-                scope_completion(uri, workspace, token, point, snippet_support))
+                scope_completions)
         }
         completions <- c(
             completions,
@@ -635,16 +916,19 @@ completion_reply <- function(id, uri, workspace, document, point, capabilities) 
 
     if (is.null(token_result$package)) {
         existing_symbols <- vapply(completions, "[[", character(1), "label")
+        token_completions <- token_completion(
+            uri, workspace, token, existing_symbols, nmax)
+        providers_incomplete <- providers_incomplete ||
+            isTRUE(attr(token_completions, "truncated"))
         completions <- c(
             completions,
-            token_completion(uri, workspace, token, existing_symbols)
+            token_completions
         )
     }
 
     init_count <- length(completions)
-    nmax <- lsp_settings$get("max_completions")
 
-    if (init_count > nmax) {
+    if (providers_incomplete || init_count > nmax) {
         isIncomplete <- TRUE
         label_text <- vapply(completions, "[[", character(1), "label")
         sort_text <- vapply(completions, "[[", character(1), "sortText")

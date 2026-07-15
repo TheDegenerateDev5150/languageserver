@@ -10,6 +10,8 @@
 - Use incremental document synchronization, reject stale background results,
   cache workspace routing, and reduce event-loop latency for more responsive
   editing.
+- Pre-index document completion candidates during background parsing and bound
+  broad result sets before constructing completion items.
 - Make on-type formatting robust for incomplete R expressions by using
   parse-validated sentinel completion with a conservative indentation fallback.
 

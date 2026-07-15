@@ -644,16 +644,48 @@ glue <- function(.x, ...) {
     .x
 }
 
+xdoc_top_level_index <- function(x) {
+    nodes <- xml_children(x)
+    nodes <- nodes[xml_name(nodes) == "expr"]
+    list(
+        nodes = nodes,
+        line1 = as.integer(xml_attr(nodes, "line1")),
+        col1 = as.integer(xml_attr(nodes, "col1")),
+        line2 = as.integer(xml_attr(nodes, "line2")),
+        col2 = as.integer(xml_attr(nodes, "col2"))
+    )
+}
+
 xdoc_find_enclosing_scopes <- function(x, line, col, top = FALSE) {
-    if (top) {
-        xpath <- "/exprlist | //expr[(@line1 < {line} or (@line1 = {line} and @col1 <= {col})) and
-                (@line2 > {line} or (@line2 = {line} and @col2 >= {col}-1))]"
+    index <- attr(x, "top_level_index", exact = TRUE)
+    condition <- paste(
+        "(@line1 < {line} or (@line1 = {line} and @col1 <= {col})) and",
+        "(@line2 > {line} or (@line2 = {line} and @col2 >= {col}-1))"
+    )
+    condition <- glue(condition, line = line, col = col)
+
+    if (is.null(index)) {
+        xpath <- paste0(
+            "/exprlist/expr[", condition,
+            "]/descendant-or-self::expr[", condition, "]"
+        )
+        scopes <- xml_find_all(x, xpath)
     } else {
-        xpath <- "//expr[(@line1 < {line} or (@line1 = {line} and @col1 <= {col})) and
-                (@line2 > {line} or (@line2 = {line} and @col2 >= {col}-1))]"
+        selected <-
+            (index$line1 < line |
+                index$line1 == line & index$col1 <= col) &
+            (index$line2 > line |
+                index$line2 == line & index$col2 >= col - 1L)
+        scopes <- xml_find_all(index$nodes[selected],
+            paste0("descendant-or-self::expr[", condition, "]"))
     }
-    xpath <- glue(xpath, line = line, col = col)
-    xml_find_all(x, xpath)
+
+    if (top) {
+        root <- xml_find_all(x, "/exprlist")
+        structure(c(unclass(root), unclass(scopes)), class = "xml_nodeset")
+    } else {
+        scopes
+    }
 }
 
 xdoc_find_token <- function(x, line, col) {

@@ -1334,3 +1334,81 @@ test_that("Completion of argument values for positional in multi-parameter funct
     expect_false("slow" %in% labels)
     expect_false("plain" %in% labels)
 })
+
+test_that("Completion providers use precomputed document indexes", {
+    fixture <- provider_fixture(c(
+        "xvar0 <- rnorm(10)",
+        "my_fun <- function(xvar1) {",
+        "    xvar2 = 1",
+        "    2 -> xvar3",
+        "    for (xvar4 in 1:10) {",
+        "        xvar",
+        "    }",
+        "}"
+    ))
+    parse_data <- fixture$workspace$get_parse_data(fixture$uri)
+
+    # Prove these providers do not need to traverse the XML document.
+    parse_data$xml_doc <- NULL
+    scope_items <- scope_completion(
+        fixture$uri,
+        fixture$workspace,
+        "xvar",
+        list(row = 5L, col = 12L)
+    )
+    scope_labels <- vapply(scope_items, `[[`, character(1L), "label")
+    expect_setequal(scope_labels, c("xvar1", "xvar2", "xvar3", "xvar4"))
+
+    token_items <- token_completion(
+        fixture$uri, fixture$workspace, "xvar")
+    token_labels <- vapply(token_items, `[[`, character(1L), "label")
+    expect_setequal(token_labels,
+        c("xvar0", "xvar1", "xvar2", "xvar3", "xvar4", "xvar"))
+})
+
+test_that("Completion providers bound broad result sets early", {
+    variables <- sprintf("    value_%04d <- %d", 1:500, 1:500)
+    fixture <- provider_fixture(c(
+        "my_fun <- function() {",
+        variables,
+        "    value_",
+        "}"
+    ))
+
+    items <- scope_completion(
+        fixture$uri,
+        fixture$workspace,
+        "value_",
+        list(row = 501L, col = 10L),
+        limit = 20L
+    )
+
+    expect_length(items, 20L)
+    expect_true(isTRUE(attr(items, "truncated")))
+    expect_equal(
+        sort(vapply(items, `[[`, character(1L), "label")),
+        sprintf("value_%04d", 1:20)
+    )
+})
+
+test_that("Argument value completion resolves formals once", {
+    calls <- 0L
+    workspace <- new.env(parent = baseenv())
+    workspace$guess_namespace <- function(...) "example"
+    workspace$get_formals <- function(...) {
+        calls <<- calls + 1L
+        alist(
+            method = c("auto", "manual"),
+            style = c("plain", "fancy")
+        )
+    }
+
+    items <- arg_value_completion(
+        NULL, workspace, NULL, NULL, "a", "my_fun")
+
+    expect_equal(calls, 1L)
+    expect_setequal(
+        vapply(items, `[[`, character(1L), "label"),
+        c("auto", "manual", "plain", "fancy")
+    )
+})
