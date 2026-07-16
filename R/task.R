@@ -143,18 +143,25 @@ TaskManager <- R6::R6Class("TaskManager",
                 return(NULL)
             }
 
+            starting <- FALSE
             for (s in private$sessions) {
                 state <- s$get_state()
                 if (state == "starting") {
                     res <- s$read()
                     if (!is.null(res) && res$code == 201) state <- s$get_state()
+                    starting <- starting || state == "starting"
                 }
                 if (state == "idle") {
                     return(s)
                 }
             }
 
-            if (length(private$sessions) < private$max_running_tasks) {
+            # A starting session can serve this task as soon as it becomes
+            # idle. Creating another one on every event-loop pass would fill
+            # the pool for a single pending task before the first R process
+            # has even finished starting.
+            if (!starting &&
+                    length(private$sessions) < private$max_running_tasks) {
                 private$create_session()
             }
 
