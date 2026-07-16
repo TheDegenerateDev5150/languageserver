@@ -164,8 +164,9 @@ test_that("TaskManager does not overprovision while a session starts", {
         max_running_tasks = 4L, cpu_load = 1
     )
     private <- tm$.__enclos_env__$private
+    fake_state <- "starting"
     private$sessions <- list(list(
-        get_state = function() "starting",
+        get_state = function() fake_state,
         read = function() NULL,
         close = function(...) NULL
     ))
@@ -175,6 +176,7 @@ test_that("TaskManager does not overprovision while a session starts", {
 
     expect_length(private$sessions, 1L)
     expect_true(private$pending_tasks$has("doc"))
+    fake_state <- "idle"
     tm$stop()
 })
 
@@ -188,7 +190,7 @@ test_that("TaskManager supersedes a running task even at capacity", {
     new_result <- NULL
     tm$add_task("doc", create_task(
         function() {
-            Sys.sleep(5)
+            Sys.sleep(0.5)
             "old"
         }, list(),
         callback = function(value) old_result <<- value
