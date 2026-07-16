@@ -544,7 +544,8 @@ text_document_inlay_hint <- function(self, id, params) {
 #' `inlayHint/resolve` request handler
 #' @noRd
 inlay_hint_resolve <- function(self, id, params) {
-    self$deliver(inlay_hint_resolve_reply(id, params))
+    workspace <- self$get_workspace(params$data$uri)
+    self$deliver(inlay_hint_resolve_reply(id, workspace, params))
 }
 
 #' `textDocument/semanticTokens/full` request handler

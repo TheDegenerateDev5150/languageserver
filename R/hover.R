@@ -6,6 +6,28 @@ hover_xpath <- paste(
     "forcond/SYMBOL[text() = '{token_quote}' and @line1 <= {row}]",
     sep = "|")
 
+#' Format hover contents for a function argument
+#' @noRd
+function_argument_hover_contents <- function(workspace, funct, package, parameter) {
+    doc <- workspace$get_documentation(funct, package, isf = TRUE)
+    if (!is.list(doc)) return(NULL)
+
+    doc_string <- doc$arguments[[parameter]]
+    if (is.null(doc_string)) {
+        doc_string <- doc$arguments$...
+        parameter <- "..."
+    }
+    if (is.null(doc_string)) return(NULL)
+
+    sig <- workspace$get_signature(funct, package)
+    if (is.null(sig)) return(doc_string)
+
+    c(
+        sprintf("```r\n%s\n```", str_trunc(sig, 300)),
+        sprintf("`%s` - %s", parameter, doc_string)
+    )
+}
+
 #' The response to a textDocument/hover Request
 #'
 #' When hovering on a symbol, if it is a function, return its help text
@@ -141,26 +163,8 @@ hover_reply <- function(id, uri, workspace, document, point) {
                     }
 
                     if (!resolved) {
-                        doc <- workspace$get_documentation(funct, package, isf = TRUE)
-                        doc_string <- NULL
-                        if (is.list(doc)) {
-                            doc_string <- doc$arguments[[token_text]]
-                            if (is.null(doc_string)) {
-                                doc_string <- doc$arguments$...
-                                token_text <- "..."
-                            }
-                        }
-                        if (!is.null(doc_string)) {
-                            sig <- workspace$get_signature(funct, package)
-                            if (is.null(sig)) {
-                                contents <- doc_string
-                            } else {
-                                sig <- str_trunc(sig, 300)
-                                contents <- c(
-                                    sprintf("```r\n%s\n```", sig),
-                                    sprintf("`%s` - %s", token_text, doc_string))
-                            }
-                        }
+                        contents <- function_argument_hover_contents(
+                            workspace, funct, package, token_text)
                         resolved <- TRUE
                     }
                 }

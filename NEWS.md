@@ -7,6 +7,8 @@
   parameter-name inlay hints.
 - Make parameter-name inlay hints conservative by default and open VS Code's
   semantic call hierarchy when a function call-count lens is clicked.
+- Show function signatures and argument documentation in parameter-name inlay
+  hint tooltips, consistent with function-argument hovers.
 - Use incremental document synchronization, reject stale background results,
   cache workspace routing, and reduce event-loop latency for more responsive
   editing.
