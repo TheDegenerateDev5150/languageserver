@@ -85,6 +85,8 @@ workspace_did_change_watched_files <- function(self, params) {
         } else if (type == FileChangeType$Deleted) {
             logger$info("remove", path)
             workspace$documents$remove(uri)
+            workspace$diagnostics_globals_cache <- NULL
+            workspace$type_hierarchy_cache$clear()
         }
         workspace$update_loaded_packages()
     }

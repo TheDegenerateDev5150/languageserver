@@ -19,6 +19,21 @@ function_call_locations <- function(workspace, symbol) {
     for (doc_uri in workspace$documents$keys()) {
         document <- workspace$documents$get(doc_uri)
         parse_data <- workspace$get_parse_data(doc_uri)
+        indexed <- parse_data$reference_index
+        if (!is.null(indexed)) {
+            selected <- which(
+                indexed$token == "SYMBOL_FUNCTION_CALL" &
+                    indexed$name == symbol &
+                    !indexed$qualified_call
+            )
+            if (length(selected)) {
+                locations <- c(
+                    locations,
+                    indexed_reference_locations(indexed, doc_uri, selected)
+                )
+            }
+            next
+        }
         xdoc <- parse_data$xml_doc
         if (is.null(xdoc)) next
 

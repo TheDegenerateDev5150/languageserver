@@ -105,7 +105,9 @@ test_that("TaskManager prunes idle sessions", {
     skip_on_cran()
 
     # Initialize TaskManager with a short timeout
-    tm <- TaskManager$new("test", use_session = TRUE, session_idle_timeout = 2)
+    tm <- TaskManager$new(
+        "test", use_session = TRUE, session_idle_timeout = 2,
+        min_idle_sessions = 0)
 
     # Create a dummy task
     task <- create_task(function() 1, list())
@@ -139,5 +141,58 @@ test_that("TaskManager prunes idle sessions", {
     sessions <- tm$.__enclos_env__$private$sessions
     expect_length(sessions, 0)
 
+    tm$stop()
+})
+
+test_that("TaskManager refreshes pending task recency", {
+    tm <- TaskManager$new(
+        "recency", process_recent_first = TRUE,
+        max_running_tasks = 1L, cpu_load = 1
+    )
+    tm$add_task("first", create_task(function() 1, list(), delay = 60))
+    tm$add_task("second", create_task(function() 2, list(), delay = 60))
+    tm$add_task("first", create_task(function() 3, list(), delay = 60))
+
+    keys <- tm$.__enclos_env__$private$pending_tasks$keys()
+    expect_equal(unlist(keys), c("second", "first"))
+    tm$stop()
+})
+
+test_that("TaskManager supersedes a running task even at capacity", {
+    skip_on_cran()
+    tm <- TaskManager$new(
+        "supersede", use_session = TRUE,
+        max_running_tasks = 1L, cpu_load = 1
+    )
+    old_result <- NULL
+    new_result <- NULL
+    tm$add_task("doc", create_task(
+        function() {
+            Sys.sleep(5)
+            "old"
+        }, list(),
+        callback = function(value) old_result <<- value
+    ))
+    for (i in 1:100) {
+        tm$run_tasks()
+        tm$check_tasks()
+        if (tm$.__enclos_env__$private$running_tasks$has("doc")) break
+        Sys.sleep(0.02)
+    }
+
+    tm$add_task("doc", create_task(
+        function() "new", list(),
+        callback = function(value) new_result <<- value
+    ))
+    expect_false(tm$.__enclos_env__$private$running_tasks$has("doc"))
+
+    for (i in 1:200) {
+        tm$check_tasks()
+        tm$run_tasks()
+        if (!is.null(new_result)) break
+        Sys.sleep(0.02)
+    }
+    expect_null(old_result)
+    expect_equal(new_result, "new")
     tm$stop()
 })

@@ -1,5 +1,90 @@
 startup_packages <- c("base", "methods", "datasets", "utils", "grDevices", "graphics", "stats")
 
+workspace_startup_packages <- local({
+    cached <- NULL
+    function() {
+        if (!is.null(cached)) return(cached)
+        cached <<- tryCatch(
+            callr::r(
+                resolve_attached_packages,
+                system_profile = TRUE,
+                user_profile = TRUE,
+                timeout = if (identical(Sys.getenv("R_COVR"), "true")) 30 else 3
+            ),
+            error = function(e) {
+                logger$info("workspace initialize error: ", e)
+                startup_packages
+            }
+        )
+        cached
+    }
+})
+
+#' A byte-bounded least-recently-used cache
+#' @noRd
+ByteLruCache <- R6::R6Class(
+    "ByteLruCache",
+    private = list(
+        entries = NULL,
+        sizes = NULL,
+        current_bytes = 0,
+        max_bytes = NULL,
+        max_entries = NULL,
+        trim = function() {
+            while (private$entries$size() > private$max_entries ||
+                    private$current_bytes > private$max_bytes) {
+                keys <- private$entries$keys()
+                if (!length(keys)) break
+                self$remove(keys[[1L]])
+            }
+        }
+    ),
+    public = list(
+        initialize = function(max_bytes, max_entries = 10L) {
+            private$entries <- collections::ordered_dict()
+            private$sizes <- collections::dict()
+            private$max_bytes <- max(as.numeric(max_bytes), 0)
+            private$max_entries <- max(as.integer(max_entries), 1L)
+        },
+        has = function(key) private$entries$has(key),
+        get = function(key, default = NULL) {
+            if (!private$entries$has(key)) return(default)
+            value <- private$entries$pop(key)
+            private$entries$set(key, value)
+            value
+        },
+        set = function(key, value) {
+            if (private$entries$has(key)) self$remove(key)
+            size <- as.numeric(object.size(value))
+            # An individual value larger than the whole budget would evict
+            # every useful entry and still leave the cache over budget.
+            if (size > private$max_bytes) return(invisible(NULL))
+            private$entries$set(key, value)
+            private$sizes$set(key, size)
+            private$current_bytes <- private$current_bytes + size
+            private$trim()
+            invisible(value)
+        },
+        remove = function(key) {
+            if (!private$entries$has(key)) return(invisible(NULL))
+            private$entries$remove(key)
+            size <- private$sizes$get(key, 0)
+            private$sizes$remove(key)
+            private$current_bytes <- max(private$current_bytes - size, 0)
+            invisible(NULL)
+        },
+        clear = function() {
+            private$entries$clear()
+            private$sizes$clear()
+            private$current_bytes <- 0
+            invisible(NULL)
+        },
+        size = function() private$entries$size(),
+        keys = function() private$entries$keys(),
+        bytes = function() private$current_bytes
+    )
+)
+
 #' A data structure for a session workspace
 #'
 #' A `Workspace` is initialized at the start of a session, when the language
@@ -24,6 +109,8 @@ Workspace <- R6::R6Class("Workspace",
         help_cache = NULL,
         parse_cache = NULL,  # Performance: Cache parse results by content hash
         diagnostics_cache = NULL,  # Performance: Cache diagnostics by content hash
+        diagnostics_globals_cache = NULL,
+        type_hierarchy_cache = NULL,
 
         initialize = function(root) {
             self$root <- root
@@ -32,24 +119,30 @@ Workspace <- R6::R6Class("Workspace",
             self$imported_packages <- character(0)
             self$global_env <- GlobalEnv$new(self$documents)
             self$namespaces <- collections::dict()
-            self$startup_packages <- tryCatch(
-                callr::r(resolve_attached_packages,
-                    system_profile = TRUE, user_profile = TRUE,
-                    timeout = if (identical(Sys.getenv("R_COVR"), "true")) 30 else 3),
-                error = function(e) {
-                    logger$info("workspace initialize error: ", e)
-                    startup_packages
-                }
-            )
+            self$startup_packages <- workspace_startup_packages()
             self$loaded_packages <- self$startup_packages
             for (pkgname in self$loaded_packages) {
                 self$namespaces$set(pkgname, PackageNamespace$new(pkgname))
             }
             self$help_cache <- collections::dict()
-            # Performance: Initialize parse cache (limit size to prevent memory issues)
-            self$parse_cache <- collections::dict()
-            # Performance: Initialize diagnostics cache (ordered for cleanup)
-            self$diagnostics_cache <- collections::ordered_dict()
+            parse_cache_mb <- lsp_settings$get("parse_cache_max_mb")
+            if (!is.numeric(parse_cache_mb) || length(parse_cache_mb) != 1L ||
+                    is.na(parse_cache_mb) || parse_cache_mb < 0) {
+                parse_cache_mb <- 64
+            }
+            diagnostics_cache_mb <- lsp_settings$get(
+                "diagnostics_cache_max_mb")
+            if (!is.numeric(diagnostics_cache_mb) ||
+                    length(diagnostics_cache_mb) != 1L ||
+                    is.na(diagnostics_cache_mb) || diagnostics_cache_mb < 0) {
+                diagnostics_cache_mb <- 16
+            }
+            self$parse_cache <- ByteLruCache$new(
+                parse_cache_mb * 1024^2, max_entries = 10L)
+            self$diagnostics_cache <- ByteLruCache$new(
+                diagnostics_cache_mb * 1024^2, max_entries = 100L)
+            self$diagnostics_globals_cache <- NULL
+            self$type_hierarchy_cache <- collections::dict()
         },
 
         load_package = function(pkgname) {
@@ -247,7 +340,30 @@ Workspace <- R6::R6Class("Workspace",
             self$loaded_packages <- loaded_packages
         },
 
+        get_diagnostics_globals = function() {
+            if (!is.null(self$diagnostics_globals_cache)) {
+                return(self$diagnostics_globals_cache)
+            }
+            globals <- new.env(parent = emptyenv())
+            if (is_package(self$root)) {
+                source_dir <- file.path(self$root, "R")
+                for (doc in self$documents$values()) {
+                    if (dirname(path_from_uri(doc$uri)) != source_dir) next
+                    parse_data <- doc$parse_data
+                    if (is.null(parse_data)) next
+                    for (symbol in parse_data$nonfuncts) {
+                        globals[[symbol]] <- NULL
+                    }
+                    list2env(parse_data$functions, globals)
+                }
+            }
+            self$diagnostics_globals_cache <- globals
+            globals
+        },
+
         update_parse_data = function(uri, parse_data) {
+            self$diagnostics_globals_cache <- NULL
+            self$type_hierarchy_cache$clear()
             # IMPORTANT: Always create xml_doc in the main process from xml_data
             # parse_document runs in a child process and cannot create xml_doc there
             # because xml2 external pointers cannot cross process boundaries
@@ -260,16 +376,6 @@ Workspace <- R6::R6Class("Workspace",
                 }
             }
             self$documents$get(uri)$update_parse_data(parse_data)
-            
-            # Performance: Clean up parse cache periodically to prevent memory bloat
-            # Keep only the most recent 50 entries
-            if (self$parse_cache$size() > 50) {
-                keys <- self$parse_cache$keys()
-                # Remove oldest entries (first half)
-                for (key in keys[1:25]) {
-                    self$parse_cache$remove(key)
-                }
-            }
         },
 
         import_from_namespace_file = function() {

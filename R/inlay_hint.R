@@ -21,7 +21,7 @@ call_argument_groups <- function(call_node) {
     boundaries <- c(0L, comma, length(argument_nodes) + 1L)
 
     groups <- vector("list", length(boundaries) - 1L)
-    for (i in seq_len(length(groups))) {
+    for (i in seq_along(groups)) {
         first <- boundaries[[i]] + 1L
         last <- boundaries[[i + 1L]] - 1L
         nodes <- if (first <= last) argument_nodes[seq.int(first, last)] else NULL
@@ -55,10 +55,17 @@ inlay_hint_reply <- function(id, uri, workspace, document, request_range) {
     xdoc <- parse_data$xml_doc
     if (is.null(xdoc)) return(Response$new(id, result = list()))
 
+    start_line <- request_range$start$line + 1L
+    end_line <- request_range$end$line + 1L
+    if (request_range$end$character == 0L && end_line > start_line) {
+        end_line <- end_line - 1L
+    }
     calls <- xml_find_all(
         xdoc,
         paste0(
-            "//expr[expr[1][following-sibling::*[1]",
+            "//expr[@line2 >= ", start_line,
+            " and @line1 <= ", end_line,
+            " and expr[1][following-sibling::*[1]",
             "[self::OP-LEFT-PAREN]] and ",
             "expr[1]//SYMBOL_FUNCTION_CALL]"
         )
