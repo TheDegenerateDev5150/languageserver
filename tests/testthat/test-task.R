@@ -158,6 +158,26 @@ test_that("TaskManager refreshes pending task recency", {
     tm$stop()
 })
 
+test_that("TaskManager does not overprovision while a session starts", {
+    tm <- TaskManager$new(
+        "starting", use_session = TRUE, min_idle_sessions = 0,
+        max_running_tasks = 4L, cpu_load = 1
+    )
+    private <- tm$.__enclos_env__$private
+    private$sessions <- list(list(
+        get_state = function() "starting",
+        read = function() NULL,
+        close = function(...) NULL
+    ))
+
+    tm$add_task("doc", create_task(function() 1, list()))
+    for (i in 1:3) tm$run_tasks()
+
+    expect_length(private$sessions, 1L)
+    expect_true(private$pending_tasks$has("doc"))
+    tm$stop()
+})
+
 test_that("TaskManager supersedes a running task even at capacity", {
     skip_on_cran()
     tm <- TaskManager$new(
