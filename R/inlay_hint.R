@@ -149,6 +149,7 @@ inlay_hint_reply <- function(id, uri, workspace, document, request_range) {
                 kind = 2L,
                 paddingRight = TRUE,
                 data = list(
+                    uri = uri,
                     functionName = function_name,
                     package = package,
                     parameter = formal_name
@@ -164,7 +165,7 @@ inlay_hint_reply <- function(id, uri, workspace, document, request_range) {
 
 #' Resolve explanatory text for an inlay hint
 #' @noRd
-inlay_hint_resolve_reply <- function(id, hint) {
+inlay_hint_resolve_reply <- function(id, workspace, hint) {
     function_name <- hint$data$functionName
     parameter <- hint$data$parameter
     package <- hint$data$package
@@ -177,9 +178,15 @@ inlay_hint_resolve_reply <- function(id, hint) {
     } else {
         paste0(package, "::", function_name)
     }
+    contents <- function_argument_hover_contents(
+        workspace, function_name, package, parameter)
+    if (is.null(contents)) {
+        contents <- sprintf(
+            "Parameter `%s` of `%s()`.", parameter, qualified_name)
+    }
     hint$tooltip <- list(
         kind = "markdown",
-        value = sprintf("Parameter `%s` of `%s()`.", parameter, qualified_name)
+        value = paste(contents, collapse = "\n\n")
     )
     Response$new(id, result = hint)
 }

@@ -21,9 +21,21 @@ test_that("inlay hints name non-obvious positional R arguments", {
     )
     expect_true(all(vapply(reply$result, `[[`, integer(1L), "kind") == 2L))
 
-    resolved <- inlay_hint_resolve_reply(2L, reply$result[[1L]])$result
-    expect_match(resolved$tooltip$value, "`trim`")
-    expect_match(resolved$tooltip$value, "`mean\\(\\)`")
+    fixture$workspace$get_documentation <- function(...) {
+        list(arguments = list(trim = "the fraction of observations to trim."))
+    }
+    fixture$workspace$get_signature <- function(...) {
+        "mean(x, trim = 0, na.rm = FALSE)"
+    }
+    resolved <- inlay_hint_resolve_reply(
+        2L, fixture$workspace, reply$result[[1L]])$result
+    expect_equal(
+        resolved$tooltip$value,
+        paste0(
+            "```r\nmean(x, trim = 0, na.rm = FALSE)\n```\n\n",
+            "`trim` - the fraction of observations to trim."
+        )
+    )
 })
 
 test_that("inlay hints skip syntax and simple calls", {
@@ -152,4 +164,8 @@ test_that("inlay hints work through the language server", {
         vapply(hints, `[[`, character(1L), "label"),
         c("mean =", "sd =")
     )
+
+    resolved <- respond(client, "inlayHint/resolve", hints[[1L]])
+    expect_match(resolved$tooltip$value, "```r\\nrnorm\\(")
+    expect_match(resolved$tooltip$value, "`mean` - vector of means")
 })
