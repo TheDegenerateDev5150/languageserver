@@ -1,3 +1,24 @@
+#' Queue only the latest expensive range-style request for a version
+#' @noRd
+enqueue_latest_reply <- function(self, uri, method, item) {
+    queue <- self$pending_replies$get(uri)[[method]]
+    retained <- list()
+    while (queue$size()) {
+        previous <- queue$pop()
+        if (isTRUE(previous$version == item$version)) {
+            self$deliver(ResponseErrorMessage$new(
+                previous$id,
+                "RequestCancelled",
+                "Request superseded by a newer request"
+            ))
+        } else {
+            retained[[length(retained) + 1L]] <- previous
+        }
+    }
+    for (previous in retained) queue$push(previous)
+    queue$push(item)
+}
+
 #' `textDocument/completion` request handler
 #'
 #' Handler to the `textDocument/completion` [Request].
@@ -517,8 +538,8 @@ text_document_inline_value <- function(self, id, params) {
 
     reply <- inline_value_reply(id, uri, workspace, document, params$range)
     if (is.null(reply)) {
-        queue <- self$pending_replies$get(uri)[["textDocument/inlineValue"]]
-        queue$push(list(id = id, version = document$version, params = params))
+        enqueue_latest_reply(self, uri, "textDocument/inlineValue", list(
+            id = id, version = document$version, params = params))
     } else {
         self$deliver(reply)
     }
@@ -534,8 +555,8 @@ text_document_inlay_hint <- function(self, id, params) {
 
     reply <- inlay_hint_reply(id, uri, workspace, document, params$range)
     if (is.null(reply)) {
-        queue <- self$pending_replies$get(uri)[["textDocument/inlayHint"]]
-        queue$push(list(id = id, version = document$version, params = params))
+        enqueue_latest_reply(self, uri, "textDocument/inlayHint", list(
+            id = id, version = document$version, params = params))
     } else {
         self$deliver(reply)
     }
@@ -560,8 +581,30 @@ text_document_semantic_tokens_full <- function(self, id, params) {
     if (is.null(document)) return(self$deliver(Response$new(id = id, result = NULL)))
     reply <- semantic_tokens_full_reply(id, uri, workspace, document)
     if (is.null(reply)) {
-        queue <- self$pending_replies$get(uri)[["textDocument/semanticTokens/full"]]
-        queue$push(list(
+        enqueue_latest_reply(self, uri, "textDocument/semanticTokens/full", list(
+            id = id,
+            version = document$version,
+            params = params
+        ))
+    } else {
+        self$deliver(reply)
+    }
+}
+
+#' `textDocument/semanticTokens/full/delta` request handler
+#' @noRd
+text_document_semantic_tokens_delta <- function(self, id, params) {
+    uri <- uri_escape_unicode(params$textDocument$uri)
+    workspace <- self$get_workspace(uri)
+    document <- workspace$documents$get(uri)
+    if (is.null(document)) {
+        return(self$deliver(Response$new(id = id, result = NULL)))
+    }
+    reply <- semantic_tokens_delta_reply(
+        id, uri, workspace, document, params$previousResultId)
+    if (is.null(reply)) {
+        enqueue_latest_reply(
+            self, uri, "textDocument/semanticTokens/full/delta", list(
             id = id,
             version = document$version,
             params = params
@@ -583,8 +626,7 @@ text_document_semantic_tokens_range <- function(self, id, params) {
     if (is.null(document)) return(self$deliver(Response$new(id = id, result = NULL)))
     reply <- semantic_tokens_range_reply(id, uri, workspace, document, params$range)
     if (is.null(reply)) {
-        queue <- self$pending_replies$get(uri)[["textDocument/semanticTokens/range"]]
-        queue$push(list(
+        enqueue_latest_reply(self, uri, "textDocument/semanticTokens/range", list(
             id = id,
             version = document$version,
             params = params

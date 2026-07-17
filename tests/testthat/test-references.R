@@ -1,3 +1,17 @@
+test_that("reference index distinguishes lexical and package scopes", {
+    fixture <- provider_fixture(c(
+        "value <- 1",
+        "fun <- function(value) value + 1",
+        "value + pkg::value()"
+    ))
+    index <- fixture$document$parse_data$reference_index
+
+    value_keys <- index$definition_key[index$name == "value"]
+    expect_true("global:value" %in% value_keys)
+    expect_true(any(startsWith(value_keys, "local:")))
+    expect_true("package:pkg:value" %in% value_keys)
+})
+
 test_that("Find References works for functions in files", {
     skip_on_cran()
     client <- language_client()

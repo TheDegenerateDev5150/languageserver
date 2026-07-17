@@ -382,6 +382,13 @@ detect_s3class <- function(scopes, token_text, document, uri) {
 #'
 #' @noRd
 find_type_supertypes <- function(workspace, type_def) {
+    cache_key <- paste(
+        "super", type_def$uri, type_def$classType, type_def$name,
+        sep = "\r")
+    if (!is.null(workspace$type_hierarchy_cache) &&
+            workspace$type_hierarchy_cache$has(cache_key)) {
+        return(workspace$type_hierarchy_cache$get(cache_key))
+    }
     supertypes <- list()
 
     # Get the document where the type is defined
@@ -420,6 +427,9 @@ find_type_supertypes <- function(workspace, type_def) {
         supertypes <- unique_supertypes
     }
 
+    if (!is.null(workspace$type_hierarchy_cache)) {
+        workspace$type_hierarchy_cache$set(cache_key, supertypes)
+    }
     supertypes
 }
 
@@ -609,6 +619,13 @@ find_s3_supertypes <- function(doc, xdoc, class_name, uri) {
 #'
 #' @noRd
 find_type_subtypes <- function(workspace, type_def) {
+    cache_key <- paste(
+        "sub", type_def$uri, type_def$classType, type_def$name,
+        sep = "\r")
+    if (!is.null(workspace$type_hierarchy_cache) &&
+            workspace$type_hierarchy_cache$has(cache_key)) {
+        return(workspace$type_hierarchy_cache$get(cache_key))
+    }
     subtypes <- list()
 
     class_type <- type_def$classType
@@ -651,6 +668,9 @@ find_type_subtypes <- function(workspace, type_def) {
         subtypes <- unique_subtypes
     }
 
+    if (!is.null(workspace$type_hierarchy_cache)) {
+        workspace$type_hierarchy_cache$set(cache_key, subtypes)
+    }
     subtypes
 }
 

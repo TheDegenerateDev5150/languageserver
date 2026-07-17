@@ -56,6 +56,237 @@ get_semantic_tokens_legend <- function() {
     )
 }
 
+#' Create an empty semantic token index
+#' @noRd
+empty_semantic_data <- function() {
+    list(
+        lines = integer(),
+        cols = integer(),
+        lengths = integer(),
+        types = integer(),
+        modifiers = integer(),
+        encoded = integer()
+    )
+}
+
+#' Build a compact semantic token index from R parse data
+#'
+#' This runs in the parse worker. Keeping ordinary integer vectors here avoids
+#' repeatedly walking the XML document on the main language-server thread.
+#' @noRd
+semantic_parse_data <- function(data, content) {
+    if (is.null(data) || !nrow(data)) {
+        return(empty_semantic_data())
+    }
+
+    token_types <- c(
+        SYMBOL = SemanticTokenTypes$variable,
+        SYMBOL_FUNCTION_CALL = SemanticTokenTypes[["function"]],
+        SYMBOL_FORMALS = SemanticTokenTypes$parameter,
+        SYMBOL_PACKAGE = SemanticTokenTypes$namespace,
+        FUNCTION = SemanticTokenTypes$keyword,
+        KEYWORD = SemanticTokenTypes$keyword,
+        NUM_CONST = SemanticTokenTypes$number,
+        INT_CONST = SemanticTokenTypes$number,
+        FLOAT_CONST = SemanticTokenTypes$number,
+        STRING = SemanticTokenTypes$string,
+        STR_CONST = SemanticTokenTypes$string,
+        COMMENT = SemanticTokenTypes$comment,
+        LEFT_ASSIGN = SemanticTokenTypes$operator,
+        RIGHT_ASSIGN = SemanticTokenTypes$operator,
+        EQ_ASSIGN = SemanticTokenTypes$operator,
+        `$` = SemanticTokenTypes$operator,
+        PIPE = SemanticTokenTypes$operator,
+        `\\` = SemanticTokenTypes$keyword
+    )
+
+    selected <- data$terminal & data$token %in% names(token_types)
+    rows <- which(selected)
+    if (!length(rows)) {
+        return(empty_semantic_data())
+    }
+
+    # Nearly all parser tokens are single-line, so build those vectors in one
+    # operation. UTF-16 conversion is only needed on lines containing UTF-8
+    # multibyte characters; ASCII positions are already LSP code units.
+    single_rows <- rows[data$line1[rows] == data$line2[rows]]
+    lines <- as.integer(data$line1[single_rows] - 1L)
+    cols <- as.integer(data$col1[single_rows] - 1L)
+    lengths <- as.integer(data$col2[single_rows] - data$col1[single_rows] + 1L)
+    types <- as.integer(unname(token_types[data$token[single_rows]]))
+    modifiers <- ifelse(
+        data$token[single_rows] == "SYMBOL_FORMALS",
+        bitwShiftL(1L, SemanticTokenModifiers$declaration),
+        0L
+    )
+    modifiers <- as.integer(modifiers)
+
+    non_ascii_lines <- nchar(content, type = "bytes") !=
+        nchar(content, type = "chars")
+    convert <- which(non_ascii_lines[data$line1[single_rows]])
+    for (i in convert) {
+        row_index <- single_rows[[i]]
+        line_text <- content[[data$line1[[row_index]]]]
+        utf16 <- code_point_to_unit(
+            line_text,
+            c(data$col1[[row_index]] - 1L, data$col2[[row_index]])
+        )
+        cols[[i]] <- utf16[[1L]]
+        lengths[[i]] <- utf16[[2L]] - utf16[[1L]]
+    }
+
+    # Semantic tokens are single-line. Split the rare multiline string into
+    # one token per non-empty source line.
+    multiline_rows <- setdiff(rows, single_rows)
+    for (row_index in multiline_rows) {
+        token_type <- unname(token_types[[data$token[[row_index]]]])
+        modifier <- if (data$token[[row_index]] == "SYMBOL_FORMALS") {
+            bitwShiftL(1L, SemanticTokenModifiers$declaration)
+        } else {
+            0L
+        }
+        for (line_number in seq.int(
+            data$line1[[row_index]], data$line2[[row_index]])) {
+            line_text <- if (line_number <= length(content)) content[[line_number]] else ""
+            start_point <- if (line_number == data$line1[[row_index]]) {
+                data$col1[[row_index]] - 1L
+            } else {
+                0L
+            }
+            end_point <- if (line_number == data$line2[[row_index]]) {
+                data$col2[[row_index]]
+            } else {
+                nchar(line_text)
+            }
+            utf16 <- code_point_to_unit(line_text, c(start_point, end_point))
+            token_length <- utf16[[2L]] - utf16[[1L]]
+            if (token_length <= 0L) next
+
+            lines <- c(lines, line_number - 1L)
+            cols <- c(cols, utf16[[1L]])
+            lengths <- c(lengths, token_length)
+            types <- c(types, token_type)
+            modifiers <- c(modifiers, modifier)
+        }
+    }
+
+    keep <- lengths > 0L
+    lines <- lines[keep]
+    cols <- cols[keep]
+    lengths <- lengths[keep]
+    types <- types[keep]
+    modifiers <- modifiers[keep]
+    if (!length(lines)) return(empty_semantic_data())
+
+    order_index <- order(lines, cols)
+    lines <- lines[order_index]
+    cols <- cols[order_index]
+    lengths <- lengths[order_index]
+    types <- types[order_index]
+    modifiers <- modifiers[order_index]
+
+    encoded <- .Call(
+        "encode_semantic_tokens_c",
+        lines, cols, lengths, types, modifiers,
+        PACKAGE = "languageserver"
+    )
+
+    list(
+        lines = lines,
+        cols = cols,
+        lengths = lengths,
+        types = types,
+        modifiers = modifiers,
+        encoded = encoded
+    )
+}
+
+#' Select semantic token data for an LSP range
+#' @noRd
+semantic_data_for_range <- function(data, range) {
+    if (is.null(data) || !length(data$lines)) {
+        return(empty_semantic_data())
+    }
+
+    start <- range$start
+    end <- range$end
+    after_start <- data$lines > start$line |
+        data$lines == start$line & data$cols + data$lengths > start$character
+    before_end <- data$lines < end$line |
+        data$lines == end$line & data$cols < end$character
+    keep <- which(after_start & before_end)
+    if (!length(keep)) {
+        return(empty_semantic_data())
+    }
+
+    lines <- data$lines[keep]
+    cols <- data$cols[keep]
+    lengths <- data$lengths[keep]
+    types <- data$types[keep]
+    modifiers <- data$modifiers[keep]
+    encoded <- .Call(
+        "encode_semantic_tokens_c",
+        lines, cols, lengths, types, modifiers,
+        PACKAGE = "languageserver"
+    )
+
+    list(
+        lines = lines,
+        cols = cols,
+        lengths = lengths,
+        types = types,
+        modifiers = modifiers,
+        encoded = encoded
+    )
+}
+
+#' Compute one compact semantic-token delta edit
+#' @noRd
+semantic_token_delta <- function(previous, current) {
+    if (identical(previous, current)) {
+        return(list())
+    }
+
+    previous_count <- length(previous) %/% 5L
+    current_count <- length(current) %/% 5L
+    prefix <- 0L
+    shared <- min(previous_count, current_count)
+    while (prefix < shared) {
+        offset <- prefix * 5L
+        indices <- seq.int(offset + 1L, offset + 5L)
+        if (!identical(previous[indices], current[indices])) break
+        prefix <- prefix + 1L
+    }
+
+    suffix <- 0L
+    while (suffix < previous_count - prefix &&
+            suffix < current_count - prefix) {
+        previous_start <- (previous_count - suffix - 1L) * 5L + 1L
+        current_start <- (current_count - suffix - 1L) * 5L + 1L
+        if (!identical(
+            previous[seq.int(previous_start, previous_start + 4L)],
+            current[seq.int(current_start, current_start + 4L)])) {
+            break
+        }
+        suffix <- suffix + 1L
+    }
+
+    current_first <- prefix * 5L + 1L
+    current_last <- (current_count - suffix) * 5L
+    replacement <- if (current_first <= current_last) {
+        current[seq.int(current_first, current_last)]
+    } else {
+        integer()
+    }
+
+    edit <- list(
+        start = prefix * 5L,
+        deleteCount = (previous_count - prefix - suffix) * 5L
+    )
+    if (length(replacement)) edit$data <- replacement
+    list(edit)
+}
+
 #' Get semantic token type for an XML token
 #'
 #' Maps R parser token names to LSP semantic token types
@@ -90,6 +321,22 @@ get_token_type <- function(token_name) {
 #' Analyzes the parse tree and extracts all semantic tokens from a document
 #' @noRd
 extract_semantic_tokens <- function(uri, workspace, document, range = NULL) {
+    parse_data <- workspace$get_parse_data(uri)
+    if (!is.null(parse_data$semantic_data)) {
+        data <- parse_data$semantic_data
+        if (!is.null(range)) data <- semantic_data_for_range(data, range)
+        if (!length(data$lines)) return(list())
+        return(lapply(seq_along(data$lines), function(i) {
+            list(
+                line = data$lines[[i]],
+                col = data$cols[[i]],
+                length = data$lengths[[i]],
+                tokenType = data$types[[i]],
+                tokenModifiers = data$modifiers[[i]]
+            )
+        }))
+    }
+
     xdoc <- workspace$get_parse_data(uri)$xml_doc
     if (is.null(xdoc)) {
         return(list())
@@ -251,8 +498,16 @@ semantic_tokens_full_reply <- function(id, uri, workspace, document) {
         return(NULL)
     }
 
-    tokens <- extract_semantic_tokens(uri, workspace, document)
-    result <- encode_semantic_tokens(tokens)
+    semantic_data <- parse_data$semantic_data
+    if (is.null(semantic_data)) {
+        tokens <- extract_semantic_tokens(uri, workspace, document)
+        result <- encode_semantic_tokens(tokens)
+    } else {
+        result <- list(data = semantic_data$encoded)
+    }
+    if (!is.null(parse_data$content_hash)) {
+        result$resultId <- parse_data$content_hash
+    }
 
     Response$new(
         id,
@@ -273,11 +528,52 @@ semantic_tokens_range_reply <- function(id, uri, workspace, document, range) {
         return(NULL)
     }
 
-    tokens <- extract_semantic_tokens(uri, workspace, document, range = range)
-    result <- encode_semantic_tokens(tokens)
+    semantic_data <- parse_data$semantic_data
+    if (is.null(semantic_data)) {
+        tokens <- extract_semantic_tokens(uri, workspace, document, range = range)
+        result <- encode_semantic_tokens(tokens)
+    } else {
+        selected <- semantic_data_for_range(semantic_data, range)
+        result <- list(data = selected$encoded)
+    }
 
     Response$new(
         id,
         result = result
     )
+}
+
+#' The response to a textDocument/semanticTokens/full/delta Request
+#' @noRd
+semantic_tokens_delta_reply <- function(id, uri, workspace, document,
+    previous_result_id) {
+    parse_data <- workspace$get_parse_data(uri)
+    if (is.null(parse_data) ||
+            (!is.null(parse_data$version) && parse_data$version != document$version)) {
+        return(NULL)
+    }
+
+    current <- parse_data$semantic_data
+    if (is.null(current)) {
+        return(semantic_tokens_full_reply(id, uri, workspace, document))
+    }
+
+    previous <- NULL
+    if (!is.null(previous_result_id) &&
+            workspace$parse_cache$has(previous_result_id)) {
+        cached <- workspace$parse_cache$get(previous_result_id)
+        previous <- cached$semantic_data$encoded
+    }
+
+    if (is.null(previous)) {
+        return(Response$new(id, result = list(
+            resultId = parse_data$content_hash,
+            data = current$encoded
+        )))
+    }
+
+    Response$new(id, result = list(
+        resultId = parse_data$content_hash,
+        edits = semantic_token_delta(previous, current$encoded)
+    ))
 }

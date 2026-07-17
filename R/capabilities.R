@@ -68,7 +68,7 @@ SemanticTokensOptions <- list(
             "abstract", "async", "modification", "documentation", "defaultLibrary"
         )
     ),
-    full = TRUE,
+    full = list(delta = TRUE),
     range = TRUE
 )
 

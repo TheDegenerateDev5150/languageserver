@@ -5,6 +5,7 @@ test_that("general LSP 3.18 capabilities are advertised", {
         TextDocumentSyncKind$Incremental
     )
     expect_true(ServerCapabilities$documentRangeFormattingProvider$rangesSupport)
+    expect_true(ServerCapabilities$semanticTokensProvider$full$delta)
     expect_equal(tail(ServerCapabilities$semanticTokensProvider$legend$tokenTypes, 1), "label")
 })
 

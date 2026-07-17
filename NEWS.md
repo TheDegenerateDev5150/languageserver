@@ -17,6 +17,13 @@
   completion items, and use deterministic native top-N selection.
 - Make on-type formatting robust for incomplete R expressions by using
   parse-validated sentinel completion with a conservative indentation fallback.
+- Precompute semantic tokens and symbol/call indexes in parse workers, support
+  semantic-token deltas, and make range providers honor requested ranges.
+- Prioritize and supersede background work by document version, start persistent
+  workers asynchronously, keep warm workers available, and defer diagnostics
+  until the current parse is ready.
+- Bound parse and diagnostics caches by memory and reuse indexed references for
+  rename, highlights, call hierarchy, and code-lens call counts.
 
 **Closed issues:**
 

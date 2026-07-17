@@ -58,11 +58,13 @@ LanguageServer <- R6::R6Class("LanguageServer",
 
             self$parse_task_manager <- TaskManager$new(
                 "parse",
-                use_session = TRUE, process_recent_first = TRUE
+                use_session = TRUE, process_recent_first = TRUE,
+                cpu_load = 0.5, max_running_tasks = 4
             )
             self$diagnostics_task_manager <- TaskManager$new(
                 "diagnostics",
-                use_session = TRUE, process_recent_first = TRUE
+                use_session = TRUE, process_recent_first = TRUE,
+                cpu_load = 0.25, max_running_tasks = 2
             )
 
             # no pool for resolve task
@@ -77,12 +79,15 @@ LanguageServer <- R6::R6Class("LanguageServer",
             super$initialize()
         },
         process_events = function() {
-            self$diagnostics_task_manager$run_tasks()
-            self$diagnostics_task_manager$check_tasks()
-            self$parse_task_manager$run_tasks()
             self$parse_task_manager$check_tasks()
-            self$resolve_task_manager$run_tasks()
+            self$diagnostics_task_manager$check_tasks()
             self$resolve_task_manager$check_tasks()
+            # Start latency-sensitive parse work before diagnostics.
+            self$parse_task_manager$run_tasks()
+            if (!self$parse_task_manager$has_work()) {
+                self$diagnostics_task_manager$run_tasks()
+            }
+            self$resolve_task_manager$run_tasks()
             for (workspace in self$workspaces$values()) {
                 workspace$poll_namespace_file()
             }
@@ -186,7 +191,9 @@ LanguageServer <- R6::R6Class("LanguageServer",
                 self$load_workspace(workspace)
             }
         },
-        text_sync = function(uri, document, run_lintr = FALSE, parse = FALSE, delay = 0) {
+        text_sync = function(uri, document, run_lintr = FALSE, parse = FALSE,
+            delay = 0, parse_delay = delay,
+            diagnostics_delay = delay) {
             if (!self$pending_replies$has(uri)) {
                 self$pending_replies$set(uri, list(
                     `textDocument/documentSymbol` = collections::queue(),
@@ -198,25 +205,26 @@ LanguageServer <- R6::R6Class("LanguageServer",
                     `textDocument/inlineValue` = collections::queue(),
                     `textDocument/inlayHint` = collections::queue(),
                     `textDocument/semanticTokens/full` = collections::queue(),
+                    `textDocument/semanticTokens/full/delta` = collections::queue(),
                     `textDocument/semanticTokens/range` = collections::queue()
                 ))
             }
 
             if (run_lintr && lsp_settings$get("diagnostics")) {
-                temp_root <- dirname(tempdir())
-                if (path_has_parent(self$rootPath, temp_root) ||
-                    !path_has_parent(path_from_uri(uri), temp_root)) {
-                    self$diagnostics_task_manager$add_task(
-                        uri,
-                        diagnostics_task(self, uri, document, delay = delay)
-                    )
+                if (parse) {
+                    self$diagnostics_task_manager$cancel(uri)
+                    document$pending_diagnostics <- TRUE
+                    document$diagnostics_delay <- diagnostics_delay
+                } else {
+                    schedule_diagnostics(
+                        self, uri, document, delay = diagnostics_delay)
                 }
             }
 
             if (parse) {
                 self$parse_task_manager$add_task(
                     uri,
-                    parse_task(self, uri, document, delay = delay)
+                    parse_task(self, uri, document, delay = parse_delay)
                 )
             }
         },
@@ -331,6 +339,7 @@ LanguageServer$set("public", "register_handlers", function() {
         `textDocument/inlayHint` = text_document_inlay_hint,
         `inlayHint/resolve` = inlay_hint_resolve,
         `textDocument/semanticTokens/full` = text_document_semantic_tokens_full,
+        `textDocument/semanticTokens/full/delta` = text_document_semantic_tokens_delta,
         `textDocument/semanticTokens/range` = text_document_semantic_tokens_range,
         `workspace/symbol` = workspace_symbol
     )
@@ -345,6 +354,7 @@ LanguageServer$set("public", "register_handlers", function() {
         `workspace/didChangeConfiguration` = workspace_did_change_configuration,
         `workspace/didChangeWatchedFiles` = workspace_did_change_watched_files,
         `workspace/didChangeWorkspaceFolders` = workspace_did_change_workspace_folders,
+        `$/cancelRequest` = cancel_request,
         `$/setTrace` = protocol_set_trace
     )
 })

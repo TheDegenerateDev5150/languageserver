@@ -20,7 +20,18 @@ inline_value_reply <- function(id, uri, workspace, document, request_range) {
     xdoc <- parse_data$xml_doc
     if (is.null(xdoc)) return(Response$new(id, result = list()))
 
-    nodes <- xml_find_all(xdoc, "//*[self::SYMBOL or self::SYMBOL_FORMALS]")
+    start_line <- request_range$start$line + 1L
+    end_line <- request_range$end$line + 1L
+    if (request_range$end$character == 0L && end_line > start_line) {
+        end_line <- end_line - 1L
+    }
+    nodes <- xml_find_all(
+        xdoc,
+        paste0(
+            "//*[(self::SYMBOL or self::SYMBOL_FORMALS) and ",
+            "@line1 >= ", start_line, " and @line1 <= ", end_line, "]"
+        )
+    )
     if (!length(nodes)) return(Response$new(id, result = list()))
 
     line1 <- as.integer(xml_attr(nodes, "line1"))

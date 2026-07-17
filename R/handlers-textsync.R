@@ -40,6 +40,24 @@ text_document_did_change <- function(self, params) {
     uri <- uri_escape_unicode(textDocument$uri)
     version <- textDocument$version
     logger$info("did change:", list(uri = uri, version = version))
+
+    pending <- self$pending_replies$get(uri, NULL)
+    for (queue in pending) {
+        retained <- list()
+        while (queue$size()) {
+            item <- queue$pop()
+            if (!is.null(item$version) && item$version < version) {
+                self$deliver(ResponseErrorMessage$new(
+                    item$id,
+                    "RequestCancelled",
+                    "Request superseded by a newer document version"
+                ))
+            } else {
+                retained[[length(retained) + 1L]] <- item
+            }
+        }
+        for (item in retained) queue$push(item)
+    }
     
     workspace <- self$get_workspace(uri)
 
@@ -59,7 +77,14 @@ text_document_did_change <- function(self, params) {
         workspace$documents$set(uri, doc)
     }
     doc$did_open()
-    self$text_sync(uri, document = doc, run_lintr = TRUE, parse = TRUE, delay = 0.5)
+    self$text_sync(
+        uri,
+        document = doc,
+        run_lintr = TRUE,
+        parse = TRUE,
+        parse_delay = lsp_settings$get("parse_delay"),
+        diagnostics_delay = lsp_settings$get("diagnostics_delay")
+    )
 }
 
 #' `textDocument/willSave` notification handler
@@ -131,6 +156,8 @@ text_document_did_close <- function(self, params) {
     if (!(is_package(workspace$root) && is_from_workspace)) {
         diagnostics_callback(self, uri, NULL, list())
         workspace$documents$remove(uri)
+        workspace$diagnostics_globals_cache <- NULL
+        workspace$type_hierarchy_cache$clear()
         workspace$update_loaded_packages()
     }
 

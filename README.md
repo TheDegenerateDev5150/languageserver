@@ -186,6 +186,10 @@ settings | default | description
 `r.lsp.snippet_support` | `true` | enable snippets in auto completion
 `r.lsp.max_completions` | 200 | maximum number of completion items
 `r.lsp.lint_cache` | `false` | toggle caching of lint results
+`r.lsp.parse_delay` | `0.15` | seconds to debounce parsing after an edit
+`r.lsp.diagnostics_delay` | `0.75` | seconds to debounce diagnostics after the current parse
+`r.lsp.parse_cache_max_mb` | `64` | maximum memory used by cached document parse versions
+`r.lsp.diagnostics_cache_max_mb` | `16` | maximum memory used by cached diagnostics
 `r.lsp.server_capabilities` | `{}` | override server capabilities defined in [capabilities.R](https://github.com/REditorSupport/languageserver/blob/master/R/capabilities.R). See FAQ below.
 `r.lsp.link_file_size_limit` | 16384 | maximum file size (in bytes) that supports document links
 
